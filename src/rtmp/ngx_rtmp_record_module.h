@@ -34,6 +34,13 @@ typedef struct {
     ngx_flag_t                          notify;
     ngx_url_t                          *url;
 
+    ngx_str_t                           usr_id;
+    ngx_str_t                           is_public;
+    ngx_str_t                           bucket;
+    ngx_str_t                           notify_url;
+    size_t                              vdoid;
+    //ngx_flag_t                          is_write_indexfile;
+
     void                              **rec_conf;
     ngx_array_t                         rec; /* ngx_rtmp_record_app_conf_t * */
 } ngx_rtmp_record_app_conf_t;
@@ -41,8 +48,10 @@ typedef struct {
 
 typedef struct {
     ngx_rtmp_record_app_conf_t         *conf;
-    ngx_file_t                          file;
+    ngx_file_t                          file, file_index;
     ngx_uint_t                          nframes;
+    u_char                              *abs_path;
+    u_char                              *publish_time;
     uint32_t                            epoch, time_shift;
     ngx_time_t                          last;
     time_t                              timestamp;
@@ -60,6 +69,9 @@ typedef struct {
     ngx_array_t                         rec; /* ngx_rtmp_record_rec_ctx_t */
     u_char                              name[NGX_RTMP_MAX_NAME];
     u_char                              args[NGX_RTMP_MAX_ARGS];
+    u_char                              full_path[NGX_MAX_PATH];
+    u_char                              public_time[256];
+    ngx_file_t                          file_index;
 } ngx_rtmp_record_ctx_t;
 
 

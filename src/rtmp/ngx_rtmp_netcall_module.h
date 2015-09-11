@@ -47,6 +47,13 @@ typedef struct {
 } ngx_rtmp_netcall_init_t;
 
 
+typedef struct {
+    ngx_msec_t                                  timeout;
+    size_t                                      bufsize;
+    ngx_log_t                                  *log;
+} ngx_rtmp_netcall_srv_conf_t;
+
+
 ngx_int_t ngx_rtmp_netcall_create(ngx_rtmp_session_t *s,
         ngx_rtmp_netcall_init_t *ci);
 
@@ -64,6 +71,5 @@ ngx_chain_t * ngx_rtmp_netcall_http_skip_header(ngx_chain_t *in);
 ngx_chain_t * ngx_rtmp_netcall_memcache_set(ngx_rtmp_session_t *s,
         ngx_pool_t *pool, ngx_str_t *key, ngx_str_t *value,
         ngx_uint_t flags, ngx_uint_t sec);
-
 
 #endif /* _NGX_RTMP_NETCALL_H_INCLUDED_ */

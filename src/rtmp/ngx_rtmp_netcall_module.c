@@ -14,18 +14,10 @@ static void * ngx_rtmp_netcall_create_srv_conf(ngx_conf_t *cf);
 static char * ngx_rtmp_netcall_merge_srv_conf(ngx_conf_t *cf,
        void *parent, void *child);
 
-static void ngx_rtmp_netcall_close(ngx_connection_t *cc);
 static void ngx_rtmp_netcall_detach(ngx_connection_t *cc);
-
+static void ngx_rtmp_netcall_close(ngx_connection_t *cc);
 static void ngx_rtmp_netcall_recv(ngx_event_t *rev);
 static void ngx_rtmp_netcall_send(ngx_event_t *wev);
-
-
-typedef struct {
-    ngx_msec_t                                  timeout;
-    size_t                                      bufsize;
-    ngx_log_t                                  *log;
-} ngx_rtmp_netcall_srv_conf_t;
 
 
 typedef struct ngx_rtmp_netcall_session_s {
@@ -48,7 +40,7 @@ typedef struct ngx_rtmp_netcall_session_s {
 
 
 typedef struct {
-    ngx_rtmp_netcall_session_t                 *cs;
+    ngx_rtmp_netcall_session_t     *cs;
 } ngx_rtmp_netcall_ctx_t;
 
 
@@ -288,7 +280,7 @@ error:
 }
 
 
-static void
+void
 ngx_rtmp_netcall_close(ngx_connection_t *cc)
 {
     ngx_rtmp_netcall_session_t         *cs, **css;
@@ -342,7 +334,7 @@ ngx_rtmp_netcall_detach(ngx_connection_t *cc)
 {
     ngx_rtmp_netcall_session_t         *cs;
 
-    cs = cc->hls ? cc->hls_data : cc->data;
+    cs = cc->data;
     cs->detached = 1;
 }
 

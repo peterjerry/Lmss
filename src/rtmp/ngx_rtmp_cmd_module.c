@@ -504,7 +504,21 @@ static ngx_int_t
 ngx_rtmp_cmd_publish_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         ngx_chain_t *in)
 {
-    static ngx_rtmp_publish_t       v;
+    static ngx_rtmp_publish_t      v;
+    u_char                         *p_start, *p_end;
+
+    ngx_rtmp_server_name_t         *names;
+    ngx_rtmp_core_main_conf_t      *cmcf;
+    ngx_rtmp_core_srv_conf_t       **cscf;
+    size_t                         n, j;
+	ngx_uint_t                     found = 0;
+
+	cmcf = ngx_rtmp_core_main_conf;
+    if (cmcf == NULL) {
+		
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "ngx_rtmp_cmd_publish_init: cmcf is null");
+        return NGX_ERROR;
+    }
 
     static ngx_rtmp_amf_elt_t      in_elts[] = {
 
@@ -537,6 +551,52 @@ ngx_rtmp_cmd_publish_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     ngx_rtmp_cmd_fill_args(v.name, v.args);
 
     ngx_memcpy(s->name, v.name, ngx_strlen(v.name));
+    ngx_memzero((u_char *)s->vdoid, 256);
+
+    p_start = (u_char *)ngx_strstr(v.args, "vdoid=");
+    if (p_start){
+
+    	p_start = p_start + ngx_strlen("vdoid=");
+    	p_end   = (u_char *)ngx_strstr(p_start, "&");
+    	if (!p_end) {
+
+			p_end = v.args + ngx_strlen(v.args);
+    	}
+    	if (p_start < p_end) {
+
+			*ngx_cpymem(s->vdoid, p_start, p_end - p_start)=0;
+    	}
+    }
+	
+	if (s->relay_type == NGX_NONE_RELAY) {
+
+		cscf = cmcf->servers.elts;
+	    for (n = 0; n < cmcf->servers.nelts; ++ n, ++ cscf) {
+
+			names = (*cscf)->server_names.elts;
+		    for (j = 0; j < (*cscf)->server_names.nelts; ++ j, ++ names) {
+
+				 if (0 == ngx_strncasecmp(s->host_in.data, names->up_srv_name.data, s->host_in.len)) {
+
+                    found = 1;
+					break;
+				 }
+			}
+			if (found == 1) {
+
+				break;
+			}
+		}
+
+		if (found != 1) {
+			
+			ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, 
+				"publish: vhost='%V' public vhost is error", &s->host_in);
+			
+			return NGX_ERROR;
+		}
+	}
+	
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                   "publish:  vhost='%V' app='%V' name='%s' args='%s' type=%s silent=%d",
                    &s->host_in ,&s->app , v.name, v.args, v.type, v.silent);
@@ -579,6 +639,11 @@ ngx_rtmp_cmd_play_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         ngx_chain_t *in)
 {
     static ngx_rtmp_play_t          v;
+    ngx_rtmp_server_name_t         *names;
+    ngx_rtmp_core_main_conf_t      *cmcf;
+    ngx_rtmp_core_srv_conf_t       **cscf;
+    size_t                         n, j;
+	ngx_uint_t                     found = 0;
 
     static ngx_rtmp_amf_elt_t       in_elts[] = {
 
@@ -610,6 +675,13 @@ ngx_rtmp_cmd_play_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
     ngx_memzero(&v, sizeof(v));
 
+	cmcf = ngx_rtmp_core_main_conf;
+    if (cmcf == NULL) {
+		
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "ngx_rtmp_cmd_play_init: cmcf is null");
+        return NGX_ERROR;
+    }
+
     if (ngx_rtmp_receive_amf(s, in, in_elts,
                              sizeof(in_elts) / sizeof(in_elts[0])))
     {
@@ -619,6 +691,34 @@ ngx_rtmp_cmd_play_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     ngx_rtmp_cmd_fill_args(v.name, v.args);
 
     ngx_memcpy(s->name, v.name, ngx_strlen(v.name));
+
+    if (s->relay_type == NGX_NONE_RELAY) {
+		
+		cscf = cmcf->servers.elts;
+	    for (n = 0; n < cmcf->servers.nelts; ++ n, ++ cscf) {
+
+			names = (*cscf)->server_names.elts;
+		    for (j = 0; j < (*cscf)->server_names.nelts; ++ j, ++ names) {
+
+				 if (0 == ngx_strncasecmp(s->host_in.data, names->name.data, s->host_in.len)) {
+
+                    found = 1;
+					break;
+				 }
+			}
+			if (found == 1) {
+
+				break;
+			}
+		}
+		if (found != 1) {
+
+			ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, 
+				"publish: vhost='%V' play vhost is error", &s->host_in);
+
+			return NGX_ERROR;
+		}
+    }
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                   "play: vhost='%V' app='%V' name='%s' args='%s' start=%i duration=%i "
                   "reset=%i silent=%i",
@@ -764,19 +864,6 @@ ngx_rtmp_cmd_disconnect_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
 
 static ngx_int_t
-ngx_rtmp_cmd_av_sent(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
-                        ngx_chain_t *in)
-{
-    if (ngx_rtmp_fire_event(s, NGX_RTMP_AV_SENT, NULL, NULL) != NGX_OK)
-    {
-        ngx_rtmp_finalize_session(s);
-    }
-
-    return NGX_OK;
-}
-
-
-static ngx_int_t
 ngx_rtmp_cmd_disconnect(ngx_rtmp_session_t *s)
 {
     return ngx_rtmp_delete_stream(s, NULL);
@@ -914,20 +1001,6 @@ ngx_rtmp_cmd_postconfiguration(ngx_conf_t *cf)
     }
 
     *h = ngx_rtmp_cmd_disconnect_init;
-
-	h = ngx_array_push(&cmcf->events[NGX_RTMP_MSG_AUDIO]);
-	if (h == NULL) {
-        return NGX_ERROR;
-    }
-
-    *h = ngx_rtmp_cmd_av_sent;
-
-	h = ngx_array_push(&cmcf->events[NGX_RTMP_MSG_VIDEO]);
-	if (h == NULL) {
-        return NGX_ERROR;
-    }
-
-    *h = ngx_rtmp_cmd_av_sent;
 
     /* register AMF callbacks */
 

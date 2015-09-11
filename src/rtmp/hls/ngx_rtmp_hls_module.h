@@ -44,7 +44,6 @@ struct ngx_rtmp_hls_ctx_s {
 	unsigned                            publisher:1;
 
     unsigned                            opened:1;
-    unsigned                            sliced:1;
 
     ngx_file_t                          file;
 
@@ -62,6 +61,7 @@ struct ngx_rtmp_hls_ctx_s {
 
     uint64_t                            frag;
     uint64_t                            frag_ts;
+    uint64_t                            frag_seq;
     ngx_uint_t                          nfrags;
     ngx_rtmp_hls_frag_t                *frags; /* circular 2 * winfrags + 1 */
 

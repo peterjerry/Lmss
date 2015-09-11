@@ -722,14 +722,9 @@ ngx_rtmp_notify_play_create(ngx_rtmp_session_t *s, void *arg,
 		names = (*cscf)->server_names.elts;
 	    for (j = 0; j < (*cscf)->server_names.nelts; ++ j, ++ names) {
 
-			 ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "s->host_in is: %V, up_srv_name is: %V, name is: %V", 
-					&s->host_in, &names->up_srv_name, &names->name);
-
 			 if (0 == ngx_strncasecmp(s->host_in.data, names->up_srv_name.data, s->host_in.len) ||
 			     	0 == ngx_strncasecmp(s->host_in.data, names->name.data, s->host_in.len)) {
 
-                ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "s->host_in is: %V, up_srv_name is: %V, name is: %V", 
-					&s->host_in, &names->up_srv_name, &names->name);
                 found = 1;
 				break;
 			 }

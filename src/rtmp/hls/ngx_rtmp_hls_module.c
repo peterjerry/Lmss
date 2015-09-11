@@ -19,7 +19,6 @@ static ngx_rtmp_play_pt                 next_play;
 static ngx_rtmp_close_stream_pt         next_close_stream;
 static ngx_rtmp_stream_begin_pt         next_stream_begin;
 static ngx_rtmp_stream_eof_pt           next_stream_eof;
-static ngx_rtmp_start_hls_slice_pt      next_start_hls_slice;
 
 
 static char * ngx_rtmp_hls_variant(ngx_conf_t *cf, ngx_command_t *cmd,
@@ -352,7 +351,7 @@ ngx_rtmp_hls_get_frag(ngx_rtmp_session_t *s, ngx_int_t n)
 
 
 static void
-ngx_rtmp_hls_next_frag(ngx_rtmp_session_t *s)
+ngx_rtmp_hls_next_frag(ngx_rtmp_session_t *s, uint64_t ts)
 {
     ngx_rtmp_hls_ctx_t         *ctx;
     ngx_rtmp_hls_app_conf_t    *hacf;
@@ -361,6 +360,7 @@ ngx_rtmp_hls_next_frag(ngx_rtmp_session_t *s)
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
 
     if (ctx->nfrags == hacf->winfrags) {
+		ctx->frag_seq = ts / (hacf->fraglen * 90);
         ctx->frag++;
     } else {
         ctx->nfrags++;
@@ -523,7 +523,7 @@ ngx_rtmp_hls_write_playlist(ngx_rtmp_session_t *s)
                      "#EXT-X-MEDIA-SEQUENCE:%uL\n"
                      "#EXT-X-TARGETDURATION:%ui\n"
                      "%s",
-                     ctx->frag, max_frag,
+                     ctx->frag_seq, max_frag,
                      hacf->type == NGX_RTMP_HLS_TYPE_EVENT ?
                      "#EXT-X-PLAYLIST-TYPE: EVENT\n" : "");
 
@@ -792,41 +792,7 @@ ngx_rtmp_hls_get_fragment_id(ngx_rtmp_session_t *s, uint64_t ts)
 
 
 static ngx_int_t
-ngx_rtmp_hls_send_start_slice(ngx_rtmp_session_t *s)
-{
-	ngx_rtmp_live_ctx_t            *lctx, *lpctx;
-	ngx_rtmp_hls_ctx_t             *hctx;
-	ngx_rtmp_session_t             *ss;
-
-	lctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
-    if (lctx == NULL || lctx->stream == NULL) {
-        return NGX_OK;
-    }
-
-	hctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
-    if (hctx == NULL) {
-		return NGX_OK;
-    }
-
-	for (lpctx = lctx->stream->ctx; lpctx; lpctx = lpctx->next) {
-        if (lpctx == lctx || lpctx->paused || lpctx->hls) {
-            continue;
-        }
-
-		ss = lpctx->session;
-		if (ngx_strncmp(ss->flashver.data, NGX_RTMP_RELAY_NAME, ngx_strlen(NGX_RTMP_RELAY_NAME)) == 0 &&
-				ss->send_sliced == 0) {
-			ngx_rtmp_send_start_hls_slice(ss, 1, hctx->frag + hctx->nfrags, hctx->frag_ts);
-			ss->send_sliced = 1;
-		}
-	}
-
-	return NGX_OK;
-}
-
-
-static ngx_int_t
-ngx_rtmp_hls_close_fragment(ngx_rtmp_session_t *s)
+ngx_rtmp_hls_close_fragment(ngx_rtmp_session_t *s, uint64_t ts)
 {
     ngx_rtmp_hls_ctx_t         *ctx;
 
@@ -843,7 +809,7 @@ ngx_rtmp_hls_close_fragment(ngx_rtmp_session_t *s)
     ctx->opened = 0;
     ctx->file.fd = NGX_INVALID_FILE;
 
-    ngx_rtmp_hls_next_frag(s);
+    ngx_rtmp_hls_next_frag(s, ts);
 
     ngx_rtmp_hls_write_playlist(s);
 
@@ -944,6 +910,11 @@ ngx_rtmp_hls_restore_m3u8(ngx_rtmp_session_t *s)
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
 
+	if (ctx->playlist.len == 0) {
+
+		return;
+	}
+
     /*open index.m3u8 and read file to buffer*/
     ngx_str_set(&file.name, "index.m3u8");
     file.log = s->connection->log;
@@ -952,7 +923,7 @@ ngx_rtmp_hls_restore_m3u8(ngx_rtmp_session_t *s)
     if (file.fd == NGX_INVALID_FILE) {
 
     	ngx_log_error(NGX_LOG_ERR, s->connection->log, ngx_errno,
-    		"ngx_rtmp_hls_restore_m3u8: file %s is not exist", ctx->playlist.data);
+    		"ngx_rtmp_hls_restore_m3u8: file %V is not exist", &ctx->playlist);
         return;
     }
 
@@ -960,16 +931,17 @@ ngx_rtmp_hls_restore_m3u8(ngx_rtmp_session_t *s)
     if (ngx_link_info((char *)ctx->playlist.data, &fi) == NGX_FILE_ERROR) {
 
         ngx_log_error(NGX_LOG_ERR, s->connection->log, ngx_errno,
-        	"ngx_rtmp_hls_restore_m3u8: get file %s info failed", ctx->playlist.data);
+        	"ngx_rtmp_hls_restore_m3u8: get file %V info failed", &ctx->playlist);
     }
+
     file_size = ngx_file_size(&fi);
     if (file_size <= 0) {
 
         ngx_log_error(NGX_LOG_ERR, s->connection->log, ngx_errno,
-        	"ngx_rtmp_hls_restore_m3u8: get %s size filed", ctx->playlist.data);
+        	"ngx_rtmp_hls_restore_m3u8: get %V size filed", &ctx->playlist);
         return;
     }
-	
+
     /*malloc space for index.m3u8*/
     p_filebuff = ngx_palloc(s->connection->pool, file_size + 1);
     if (p_filebuff == NULL) {
@@ -983,10 +955,11 @@ ngx_rtmp_hls_restore_m3u8(ngx_rtmp_session_t *s)
     if (ngx_read_file(&file, (u_char *)p_filebuff, file_size, 0) < 0) {
 
         ngx_log_error(NGX_LOG_ERR, s->connection->log, ngx_errno,
-        	"ngx_rtmp_hls_restore_m3u8: read %s file failed", ctx->playlist.data);
+        	"ngx_rtmp_hls_restore_m3u8: read %V file failed", ctx->playlist);
         ngx_close_file(file.fd);
         return;
     }
+
     ngx_close_file(file.fd);
     p_filebuff[file_size] = 0;
 
@@ -1000,9 +973,10 @@ ngx_rtmp_hls_restore_m3u8(ngx_rtmp_session_t *s)
     if (file_bak.fd == NGX_INVALID_FILE) {
 		
     	ngx_log_error(NGX_LOG_ERR, s->connection->log, ngx_errno,
-    		"ngx_rtmp_hls_restore_m3u8: open file %s failed", ctx->playlist_bak.data);
+    		"ngx_rtmp_hls_restore_m3u8: open file %V failed", ctx->playlist_bak);
         return;
     }
+
     ngx_write_file(&file_bak, (u_char *)p_filebuff, file_size, 0);
 
     ngx_close_file(file_bak.fd);
@@ -1674,7 +1648,7 @@ ngx_rtmp_hls_close_stream(ngx_rtmp_session_t *s, ngx_rtmp_close_stream_t *v)
 
 	if (ctx->publisher) {
 
-		ngx_rtmp_hls_close_fragment(s);
+		ngx_rtmp_hls_close_fragment(s, 0);
 
 		ngx_rtmp_hls_restore_m3u8(s);
 	}
@@ -1822,6 +1796,13 @@ ngx_rtmp_hls_update_fragment(ngx_rtmp_session_t *s, uint64_t ts,
             break;
     }
 
+	if (ctx->is_first_packge &&
+			hacf->naming == NGX_RTMP_HLS_NAMING_TIMESTAMP &&
+			hacf->slicing == NGX_RTMP_HLS_SLICING_ALIGNED) {
+
+        ctx->frag_seq = ts / (hacf->fraglen * 90);
+    }
+
     if (hacf->slicing_way == 1) {
 
         if (ctx->is_first_packge) {
@@ -1834,11 +1815,8 @@ ngx_rtmp_hls_update_fragment(ngx_rtmp_session_t *s, uint64_t ts,
             if (ts_len >= (int32_t)hacf->fraglen) {
 
                 ctx->base_timestamp = timestamp;
-                if (!(s->relay && !ctx->sliced)) {
-
-                    ngx_rtmp_hls_close_fragment(s);
-                    ngx_rtmp_hls_open_fragment(s, ts, discont);
-                }
+                ngx_rtmp_hls_close_fragment(s, ts);
+                ngx_rtmp_hls_open_fragment(s, ts, discont);
             }
         }
 
@@ -1846,11 +1824,8 @@ ngx_rtmp_hls_update_fragment(ngx_rtmp_session_t *s, uint64_t ts,
 
     	if (boundary || force) {
 
-            if (!(s->relay && !ctx->sliced)) {
-
-                ngx_rtmp_hls_close_fragment(s);
-                ngx_rtmp_hls_open_fragment(s, ts, discont);
-            }
+            ngx_rtmp_hls_close_fragment(s, ts);
+            ngx_rtmp_hls_open_fragment(s, ts, discont);
     	}
 
     }
@@ -2293,44 +2268,11 @@ ngx_rtmp_hls_stream_eof(ngx_rtmp_session_t *s, ngx_rtmp_stream_eof_t *v)
 {
     ngx_rtmp_hls_flush_audio(s);
 
-    ngx_rtmp_hls_close_fragment(s);
+    ngx_rtmp_hls_close_fragment(s, 0);
 
 	ngx_rtmp_hls_restore_m3u8(s);
 
     return next_stream_eof(s, v);
-}
-
-
-static ngx_int_t
-ngx_rtmp_hls_start_hls_slice(ngx_rtmp_session_t *s, ngx_rtmp_start_hls_slice_t *v)
-{
-	ngx_rtmp_hls_ctx_t             *ctx;
-	ngx_rtmp_hls_app_conf_t        *hacf;
-
-    hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
-
-	if (s->relay == 0 || v == NULL) {
-		goto next;
-	}
-
-	ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
-
-	if (ctx == NULL) {
-		goto next;
-	}
-
-	ngx_log_debug3(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
-               "start_hls_slice: ctx->sliced='%d' frag=%uD frag_ts=%uD",
-               ctx->sliced, v->frag, v->frag_ts);
-
-	if (ctx->sliced == 0) {
-		ctx->frag = v->frag;
-		ctx->frag_ts = v->frag_ts;
-		ctx->sliced = 1;
-	}
-
-next:
-	return next_start_hls_slice(s, v);
 }
 
 
@@ -2654,15 +2596,21 @@ ngx_rtmp_hls_merge_app_conf(ngx_conf_t *cf, void *parent, void *child)
 static void
 ngx_rtmp_hls_close_connection(ngx_connection_t *c)
 {
+	static ngx_rtmp_close_stream_t	   v;
+
 	ngx_rtmp_session_t		   *s;
 	ngx_rtmp_core_srv_conf_t   *cscf;
 	ngx_rtmp_hls_ctx_t         *ctx;
 
-	s = c->hls ? c->hls_data : c->data;
+	if (!c->hls) {
+		return;
+	}
+
+	s = c->hls_data;
 	c = s->connection;
 
 	cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
-	ctx  = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
+	ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
 
     ngx_log_error(NGX_LOG_ERR, c->log, 0, "hls close connection");
 
@@ -2683,6 +2631,7 @@ ngx_rtmp_hls_close_connection(ngx_connection_t *c)
 
 	ngx_destroy_pool(c->hls_pool);
 
+    next_close_stream(s, &v);
 }
 
 
@@ -3223,16 +3172,6 @@ ngx_rtmp_hls_auth_done(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
 
 static ngx_int_t
-ngx_rtmp_hls_av_sent(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
-        ngx_chain_t *in)
-{
-	ngx_rtmp_hls_send_start_slice(s);
-
-	return NGX_OK;
-}
-
-
-static ngx_int_t
 ngx_rtmp_hls_get_server_name(const ngx_str_t *up_server_name, ngx_str_t *out_server_name)
 {
 	ngx_rtmp_core_main_conf_t      *cmcf;
@@ -3733,9 +3672,6 @@ ngx_rtmp_hls_postconfiguration(ngx_conf_t *cf)
     h = ngx_array_push(&cmcf->events[NGX_RTMP_MSG_AUDIO]);
     *h = ngx_rtmp_hls_audio;
 
-	h = ngx_array_push(&cmcf->events[NGX_RTMP_AV_SENT]);
-    *h = ngx_rtmp_hls_av_sent;
-
 	h = ngx_array_push(&cmcf->events[NGX_RTMP_AUTH_DONE]);
     *h = ngx_rtmp_hls_auth_done;
 
@@ -3753,9 +3689,6 @@ ngx_rtmp_hls_postconfiguration(ngx_conf_t *cf)
 
     next_stream_eof = ngx_rtmp_stream_eof;
     ngx_rtmp_stream_eof = ngx_rtmp_hls_stream_eof;
-
-	next_start_hls_slice = ngx_rtmp_start_hls_slice;
-    ngx_rtmp_start_hls_slice = ngx_rtmp_hls_start_hls_slice;
 
     return NGX_OK;
 }

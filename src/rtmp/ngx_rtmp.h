@@ -120,8 +120,7 @@ typedef struct {
 #define NGX_RTMP_DISCONNECT             NGX_RTMP_MSG_MAX + 2
 #define NGX_RTMP_HANDSHAKE_DONE         NGX_RTMP_MSG_MAX + 3
 #define NGX_RTMP_AUTH_DONE              NGX_RTMP_MSG_MAX + 4
-#define NGX_RTMP_AV_SENT                NGX_RTMP_MSG_MAX + 5
-#define NGX_RTMP_MAX_EVENT              NGX_RTMP_MSG_MAX + 6
+#define NGX_RTMP_MAX_EVENT              NGX_RTMP_MSG_MAX + 5
 
 
 /* RMTP control message types */
@@ -327,6 +326,7 @@ typedef struct {
     /* connection parameters */
     ngx_str_t               app;
     u_char                  name[256];
+    u_char                  vdoid[256];
     ngx_str_t               args;
     ngx_str_t               flashver;
     ngx_str_t               swf_url;
