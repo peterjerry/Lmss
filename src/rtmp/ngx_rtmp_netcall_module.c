@@ -7,7 +7,9 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include "ngx_rtmp_netcall_module.h"
+#include "ngx_rtmp_cmd_module.h"
 
+static ngx_rtmp_disconnect_pt   next_disconnect;
 
 static ngx_int_t ngx_rtmp_netcall_postconfiguration(ngx_conf_t *cf);
 static void * ngx_rtmp_netcall_create_srv_conf(ngx_conf_t *cf);
@@ -125,13 +127,15 @@ ngx_rtmp_netcall_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 
 
 static ngx_int_t
-ngx_rtmp_netcall_disconnect(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
-        ngx_chain_t *in)
+ngx_rtmp_netcall_disconnect(ngx_rtmp_session_t *s)
 {
     ngx_rtmp_netcall_ctx_t         *ctx;
     ngx_rtmp_netcall_session_t     *cs;
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
+
+	ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "netcall disconnect: vhost='%V' app='%V' name=%s'",
+			&s->host_in ,&s->app, s->name);
 
     if (ctx) {
         for (cs = ctx->cs; cs; cs = cs->next) {
@@ -139,7 +143,7 @@ ngx_rtmp_netcall_disconnect(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         }
     }
 
-    return NGX_OK;
+	return next_disconnect(s);
 }
 
 
@@ -752,13 +756,9 @@ ngx_rtmp_netcall_memcache_set(ngx_rtmp_session_t *s, ngx_pool_t *pool,
 static ngx_int_t
 ngx_rtmp_netcall_postconfiguration(ngx_conf_t *cf)
 {
-    ngx_rtmp_core_main_conf_t          *cmcf;
-    ngx_rtmp_handler_pt                *h;
 
-    cmcf = ngx_rtmp_conf_get_module_main_conf(cf, ngx_rtmp_core_module);
-
-    h = ngx_array_push(&cmcf->events[NGX_RTMP_DISCONNECT]);
-    *h = ngx_rtmp_netcall_disconnect;
+	next_disconnect = ngx_rtmp_disconnect;
+    ngx_rtmp_disconnect = ngx_rtmp_netcall_disconnect;
 
     return NGX_OK;
 }

@@ -2800,8 +2800,7 @@ ngx_rtmp_hls_init_connection(ngx_http_request_t *r, ngx_int_t pt, ngx_str_t host
         }
     }
 
-	ngx_log_error(NGX_LOG_INFO, c->log, 0, "*%ui hls client connected '%V'",
-                  c->number, &c->addr_text);
+	ngx_log_error(NGX_LOG_INFO, c->log, 0, "hls client connected '%V'", &c->addr_text);
 
 	c->hls_pool = ngx_create_pool(NGX_DEFAULT_POOL_SIZE, c->log);
 
@@ -3026,6 +3025,10 @@ ngx_rtmp_hls_proxy_handle(ngx_rtmp_session_t *s,
 	}
 
 	ctx->hls_session = ngx_palloc(cc->hls_pool, sizeof(ngx_rtmp_hls_session_t));
+	if (!ctx->hls_session) {
+		return NGX_OK;
+	}
+
 	ctx->hls_session->timeout = 10 * 1000;
 	ctx->hls_session->out = in;
 	cc->write->handler = ngx_rtmp_hls_send;
