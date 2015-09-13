@@ -152,6 +152,41 @@ ngx_chain_add_copy(ngx_pool_t *pool, ngx_chain_t **chain, ngx_chain_t *in)
 }
 
 
+ngx_int_t
+ngx_chain_alloc_copy(ngx_pool_t *pool, ngx_chain_t **out, ngx_chain_t *in)
+{
+    ngx_chain_t  *cl, **ll;
+
+    ll = out;
+
+    for (cl = *out; cl; cl = cl->next) {
+        ll = &cl->next;
+    }
+
+    while (in) {
+        cl = ngx_alloc_chain_link(pool);
+        if (cl == NULL) {
+            return NGX_ERROR;
+        }
+
+		cl->buf = ngx_create_temp_buf(pool, ngx_buf_size(in->buf));
+		if (cl->buf == NULL) {
+			return NGX_ERROR;
+		}
+
+        cl->buf->last = ngx_cpymem(cl->buf->last, in->buf->start, ngx_buf_size(in->buf));
+
+        *ll = cl;
+        ll = &cl->next;
+        in = in->next;
+    }
+
+    *ll = NULL;
+
+    return NGX_OK;
+}
+
+
 ngx_chain_t *
 ngx_chain_get_free_buf(ngx_pool_t *p, ngx_chain_t **free)
 {
