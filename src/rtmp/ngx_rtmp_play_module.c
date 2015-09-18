@@ -947,9 +947,9 @@ ngx_rtmp_play_remote_create(ngx_rtmp_session_t *s, void *arg, ngx_pool_t *pool)
 
     ngx_rtmp_play_ctx_t            *ctx;
     ngx_rtmp_play_entry_t          *pe;
-    ngx_str_t                      *addr_text, uri;
+    ngx_str_t                      *addr_text, uri, args;
     u_char                         *p, *name;
-    size_t                          args_len, name_len, len;
+    size_t                          name_len, len;
     static ngx_str_t                text_plain = ngx_string("text/plain");
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_play_module);
@@ -959,18 +959,19 @@ ngx_rtmp_play_remote_create(ngx_rtmp_session_t *s, void *arg, ngx_pool_t *pool)
     name = v->name + ctx->pfx_size;
 
     name_len = ngx_strlen(name);
-    args_len = ngx_strlen(v->args);
     addr_text = &s->connection->addr_text;
 
     len = pe->url->uri.len + 1 +
           name_len + ctx->sfx.len +
-          sizeof("?addr=") + addr_text->len * 3 +
-          1 + args_len;
+          sizeof("?addr=") + addr_text->len * 3;
 
     uri.data = ngx_palloc(pool, len);
     if (uri.data == NULL) {
         return NULL;
     }
+
+	args.data = v->args;
+	args.len = ngx_strlen(v->args);
 
     p = uri.data;
 
@@ -985,15 +986,11 @@ ngx_rtmp_play_remote_create(ngx_rtmp_session_t *s, void *arg, ngx_pool_t *pool)
     p = ngx_cpymem(p, (u_char*)"?addr=", sizeof("&addr=") -1);
     p = (u_char*)ngx_escape_uri(p, addr_text->data, addr_text->len,
                                 NGX_ESCAPE_ARGS);
-    if (args_len) {
-        *p++ = '&';
-        p = (u_char *) ngx_cpymem(p, v->args, args_len);
-    }
 
     uri.len = p - uri.data;
 
     return ngx_rtmp_netcall_http_format_request(NGX_RTMP_NETCALL_HTTP_GET,
-                                                &pe->url->host, &uri,
+                                                &pe->url->host, &uri, &args,
                                                 NULL, NULL, pool, &text_plain);
 }
 

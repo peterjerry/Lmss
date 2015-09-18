@@ -490,9 +490,9 @@ ngx_rtmp_netcall_send(ngx_event_t *wev)
 
 ngx_chain_t *
 ngx_rtmp_netcall_http_format_request(ngx_int_t method, ngx_str_t *host,
-                                     ngx_str_t *uri, ngx_chain_t *args,
-                                     ngx_chain_t *body, ngx_pool_t *pool,
-                                     ngx_str_t *content_type)
+                                     ngx_str_t *uri, ngx_str_t *extra, 
+                                     ngx_chain_t *args, ngx_chain_t *body,
+                                     ngx_pool_t *pool, ngx_str_t *content_type)
 {
     ngx_chain_t                    *al, *bl, *ret;
     ngx_buf_t                      *b;
@@ -500,6 +500,7 @@ ngx_rtmp_netcall_http_format_request(ngx_int_t method, ngx_str_t *host,
     static const char              *methods[2] = { "GET", "POST" };
     static const char               rq_tmpl[] = " HTTP/1.0\r\n"
                                                 "Host: %V\r\n"
+                                                "Extra: %V\r\n"
                                                 "Content-Type: %V\r\n"
                                                 "Connection: Close\r\n"
                                                 "Content-Length: %uz\r\n"
@@ -544,7 +545,7 @@ ngx_rtmp_netcall_http_format_request(ngx_int_t method, ngx_str_t *host,
         return NULL;
     }
 
-    b = ngx_create_temp_buf(pool, sizeof(rq_tmpl) + host->len +
+    b = ngx_create_temp_buf(pool, sizeof(rq_tmpl) + host->len + extra->len +
                             content_type->len + NGX_SIZE_T_LEN);
     if (b == NULL) {
         return NULL;
@@ -553,7 +554,7 @@ ngx_rtmp_netcall_http_format_request(ngx_int_t method, ngx_str_t *host,
     bl->buf = b;
 
     b->last = ngx_snprintf(b->last, b->end - b->last, rq_tmpl,
-                           host, content_type, content_length);
+                           host, extra, content_type, content_length);
 
     al->next = bl;
     bl->next = body;
@@ -569,11 +570,7 @@ ngx_rtmp_netcall_http_format_session(ngx_rtmp_session_t *s, ngx_pool_t *pool)
     ngx_chain_t                    *cl;
     ngx_buf_t                      *b;
     ngx_str_t                      *addr_text;
-//	struct sockaddr                *sa;
-//	struct sockaddr_in             *sin;
 	in_port_t                       port = 0;
-	//modify for warning
-	//ngx_rtmp_listen_t              *ls;
 
 	cmcf = ngx_rtmp_get_module_main_conf(s, ngx_rtmp_core_module);
 

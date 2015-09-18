@@ -10,7 +10,8 @@ local jsonobj = {
 		h_port = 8080,
 		internal_ip = '10.4.22.118',
 		telecom_ip = '115.231.96.59',
-		unicom_ip = '101.71.27.59'
+		unicom_ip = '101.71.27.59',
+		mobile_ip = '123.45.11.20'
 	}
 }
 
