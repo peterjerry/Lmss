@@ -2508,14 +2508,14 @@ ngx_rtmp_hls_merge_app_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_rtmp_hls_cleanup_t     *cleanup;
 
     ngx_conf_merge_value(conf->hls, prev->hls, 0);
-    ngx_conf_merge_msec_value(conf->fraglen, prev->fraglen, 5000);
+    ngx_conf_merge_msec_value(conf->fraglen, prev->fraglen, 2000);
     ngx_conf_merge_msec_value(conf->max_fraglen, prev->max_fraglen,
                               conf->fraglen * 10);
     ngx_conf_merge_msec_value(conf->muxdelay, prev->muxdelay, 700);
     ngx_conf_merge_msec_value(conf->sync, prev->sync, 2);
     ngx_conf_merge_msec_value(conf->playlen, prev->playlen, 6000);
     ngx_conf_merge_value(conf->continuous, prev->continuous, 0);
-    ngx_conf_merge_value(conf->slicing_force, prev->slicing_force, 0);
+    ngx_conf_merge_value(conf->slicing_force, prev->slicing_force, 1);
     ngx_conf_merge_value(conf->nested, prev->nested, 1);
     ngx_conf_merge_uint_value(conf->naming, prev->naming,
                               NGX_RTMP_HLS_NAMING_TIMESTAMP);
@@ -2531,6 +2531,7 @@ ngx_rtmp_hls_merge_app_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_conf_merge_str_value(conf->base_url, prev->base_url, "");
     ngx_conf_merge_value(conf->granularity, prev->granularity, 0);
 	ngx_conf_merge_value(conf->nbuckets, prev->nbuckets, 1024);
+	ngx_conf_merge_str_value(conf->path, prev->path, "/dev/shm");
 
 	conf->pool = ngx_create_pool(4096, &cf->cycle->new_log);
     if (conf->pool == NULL) {
@@ -2577,8 +2578,6 @@ ngx_rtmp_hls_merge_app_conf(ngx_conf_t *cf, void *parent, void *child)
 			return NGX_CONF_ERROR;
         }
     }
-
-    ngx_conf_merge_str_value(conf->path, prev->path, "/dev/shm");
 
     return NGX_CONF_OK;
 }
@@ -3482,6 +3481,7 @@ ngx_rtmp_http_hls_handler(ngx_http_request_t *r)
 	s = r->connection->hls_data;
 	if (s != NULL) {
 
+		r->read_event_handler = ngx_http_test_reading;
 		r->keepalived_handler = ngx_rtmp_hls_close_keepalived;
 		s->r = r;
 
