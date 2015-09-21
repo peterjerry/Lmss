@@ -328,7 +328,7 @@ ngx_rtmp_notify_merge_app_conf(ngx_conf_t *cf, void *parent, void *child)
     }
 
     ngx_conf_merge_uint_value(conf->method, prev->method,
-                              NGX_RTMP_NETCALL_HTTP_POST);
+                              NGX_RTMP_NETCALL_HTTP_GET);
     ngx_conf_merge_msec_value(conf->update_timeout, prev->update_timeout,
                               30000);
     ngx_conf_merge_value(conf->update_strict, prev->update_strict, 1);
@@ -1400,28 +1400,31 @@ ngx_rtmp_notify_json_decode(ngx_rtmp_session_t *s, ngx_int_t cluster,
 		obj = NULL;
 	}
 
-	ngx_int_t xcom_sp_idx = ngx_random() % (NGX_RTMP_NOTIFY_SP_MAX - 1);
-  	if (ip_list[xcom_sp_idx] && nmcf->iplist[xcom_sp_idx].len > 0) {
-		
-	} else {
-		xcom_sp_idx = (xcom_sp_idx + 1) % (NGX_RTMP_NOTIFY_SP_MAX - 1);
+	ngx_int_t xcom_sp_idx = NGX_RTMP_NOTIFT_SP_INTERNEL;
+	if (cluster) {
+		xcom_sp_idx = (ngx_random() % (NGX_RTMP_NOTIFY_SP_MAX - 1)) + 1;
 		if (ip_list[xcom_sp_idx] && nmcf->iplist[xcom_sp_idx].len > 0) {
 			
 		} else {
-			xcom_sp_idx = (xcom_sp_idx + 1) % (NGX_RTMP_NOTIFY_SP_MAX - 1);
+			xcom_sp_idx = ((xcom_sp_idx + 1) % (NGX_RTMP_NOTIFY_SP_MAX - 1)) + 1;
 			if (ip_list[xcom_sp_idx] && nmcf->iplist[xcom_sp_idx].len > 0) {
 				
 			} else {
-				json_object_put(root_obj);
-				ret = NGX_ERROR;
-				goto finally;
+				xcom_sp_idx = ((xcom_sp_idx + 1) % (NGX_RTMP_NOTIFY_SP_MAX - 1)) + 1;
+				if (ip_list[xcom_sp_idx] && nmcf->iplist[xcom_sp_idx].len > 0) {
+					
+				} else {
+					json_object_put(root_obj);
+					ret = NGX_ERROR;
+					goto finally;
+				}
 			}
 		}
 	}
 
 	ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
-            "slot=%i, json_decode: name='%V' app='%V' local_ip='%s' local_type='%d' remote_ip='%s' remote_type='%d'",
-            ngx_process_slot, name, app, nmcf->iplist[xcom_sp_idx].data, xcom_sp_idx, ip_list[xcom_sp_idx], xcom_sp_idx);
+            "slot=%i, json_decode: name='%V' app='%V' cluster='%d' local_idx='%d' remote_ip='%s' remote_idx='%d'",
+            ngx_process_slot, name, app, cluster, xcom_sp_idx, ip_list[xcom_sp_idx], xcom_sp_idx);
 
 	if (cluster) {
 
@@ -2267,7 +2270,7 @@ ngx_rtmp_notify_method(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         nacf->method = NGX_RTMP_NETCALL_HTTP_GET;
 
     } else if (value->len == sizeof("post") - 1 &&
-               ngx_strncasecmp(value->data, (u_char *) "post", value->len) == 0)
+        ngx_strncasecmp(value->data, (u_char *) "post", value->len) == 0)
     {
         nacf->method = NGX_RTMP_NETCALL_HTTP_POST;
 
