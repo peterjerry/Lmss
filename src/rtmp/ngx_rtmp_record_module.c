@@ -864,7 +864,10 @@ ngx_rtmp_record_write_indexfile(ngx_rtmp_session_t *s, ngx_rtmp_record_ctx_t *ct
     create_mode = NGX_FILE_APPEND;
 
 	p = ngx_snprintf(path, NGX_MAX_PATH, "%sindex.txt", rctx->abs_path);
-    ngx_memzero(&rctx->file_index, sizeof(rctx->file_index));
+    if(p == NULL)
+		return NGX_ERROR;
+
+	ngx_memzero(&rctx->file_index, sizeof(rctx->file_index));
     ngx_str_set(&rctx->file_index.name, "index.txt");
     rctx->file_index.offset = 0;
     rctx->file_index.log = s->connection->log;

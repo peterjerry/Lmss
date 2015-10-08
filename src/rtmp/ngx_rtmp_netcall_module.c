@@ -562,6 +562,72 @@ ngx_rtmp_netcall_http_format_request(ngx_int_t method, ngx_str_t *host,
     return ret;
 }
 
+ngx_chain_t *
+ngx_rtmp_netcall_http_user_format_session(ngx_rtmp_session_t *s, ngx_pool_t *pool)
+{
+	ngx_rtmp_core_main_conf_t      *cmcf;
+    ngx_chain_t                    *cl;
+    ngx_buf_t                      *b;
+    //ngx_str_t                      *addr_text;
+
+	cmcf = ngx_rtmp_get_module_main_conf(s, ngx_rtmp_core_module);
+
+   // addr_text = &s->connection->addr_text;
+
+    cl = ngx_alloc_chain_link(pool);
+    if (cl == NULL) {
+        return NULL;
+    }
+
+    b = ngx_create_temp_buf(pool,
+            sizeof("app=") - 1 + s->app.len * 3 +
+            sizeof("&flashver=") - 1 + s->flashver.len * 3 +
+            sizeof("&swfurl=") - 1 + s->swf_url.len * 3 +
+            sizeof("&tcurl=") - 1 + s->tc_url.len * 3
+            //sizeof("&pageurl=") - 1 + s->page_url.len * 3 +
+            //sizeof("&addr=") - 1 + addr_text->len * 3 
+        );
+
+    if (b == NULL) {
+        return NULL;
+    }
+
+    cl->buf = b;
+    cl->next = NULL;
+
+    b->last = ngx_cpymem(b->last, (u_char*) "app=", sizeof("app=") - 1);
+    b->last = (u_char*) ngx_escape_uri(b->last, s->app.data, s->app.len,
+                                       NGX_ESCAPE_ARGS);
+
+    b->last = ngx_cpymem(b->last, (u_char*) "&flashver=",
+                         sizeof("&flashver=") - 1);
+    b->last = (u_char*) ngx_escape_uri(b->last, s->flashver.data,
+                                       s->flashver.len, NGX_ESCAPE_ARGS);
+
+    b->last = ngx_cpymem(b->last, (u_char*) "&swfurl=",
+                         sizeof("&swfurl=") - 1);
+    b->last = (u_char*) ngx_escape_uri(b->last, s->swf_url.data,
+                                       s->swf_url.len, NGX_ESCAPE_ARGS);
+
+    b->last = ngx_cpymem(b->last, (u_char*) "&tcurl=",
+                         sizeof("&tcurl=") - 1);
+    b->last = (u_char*) ngx_escape_uri(b->last, s->tc_url.data,
+                                       s->tc_url.len, NGX_ESCAPE_ARGS);
+/*
+    b->last = ngx_cpymem(b->last, (u_char*) "&pageurl=",
+                         sizeof("&pageurl=") - 1);
+    b->last = (u_char*) ngx_escape_uri(b->last, s->page_url.data,
+                                       s->page_url.len, NGX_ESCAPE_ARGS);
+
+    b->last = ngx_cpymem(b->last, (u_char*) "&addr=", sizeof("&addr=") - 1);
+    b->last = (u_char*) ngx_escape_uri(b->last, addr_text->data,
+                                       addr_text->len, NGX_ESCAPE_ARGS);
+
+*/
+    return cl;
+}
+
+
 
 ngx_chain_t *
 ngx_rtmp_netcall_http_format_session(ngx_rtmp_session_t *s, ngx_pool_t *pool)

@@ -58,6 +58,10 @@ ngx_int_t ngx_rtmp_netcall_create(ngx_rtmp_session_t *s,
 
 
 /* HTTP handling */
+
+ngx_chain_t * ngx_rtmp_netcall_http_user_format_session(ngx_rtmp_session_t *s,
+        ngx_pool_t *pool);
+
 ngx_chain_t * ngx_rtmp_netcall_http_format_session(ngx_rtmp_session_t *s,
         ngx_pool_t *pool);
 ngx_chain_t * ngx_rtmp_netcall_http_format_request(ngx_int_t method,

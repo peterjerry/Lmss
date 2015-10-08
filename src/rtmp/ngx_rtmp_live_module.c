@@ -186,7 +186,7 @@ ngx_rtmp_live_merge_app_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_rtmp_live_app_conf_t *prev = parent;
     ngx_rtmp_live_app_conf_t *conf = child;
 
-    ngx_conf_merge_value(conf->live, prev->live, 0);
+    ngx_conf_merge_value(conf->live, prev->live, 1);
     ngx_conf_merge_value(conf->nbuckets, prev->nbuckets, 1024);
     ngx_conf_merge_msec_value(conf->buflen, prev->buflen, 0);
     ngx_conf_merge_msec_value(conf->sync, prev->sync, 300);

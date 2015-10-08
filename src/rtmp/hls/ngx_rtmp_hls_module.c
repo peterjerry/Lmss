@@ -901,6 +901,7 @@ ngx_rtmp_hls_open_fragment(ngx_rtmp_session_t *s, uint64_t ts,
 }
 
 
+#if 0
 static void
 ngx_rtmp_hls_restore_m3u8(ngx_rtmp_session_t *s)
 {
@@ -986,6 +987,8 @@ ngx_rtmp_hls_restore_m3u8(ngx_rtmp_session_t *s)
     ngx_close_file(file_bak.fd);
 
 }
+
+#endif
 
 
 static void
@@ -1653,8 +1656,6 @@ ngx_rtmp_hls_close_stream(ngx_rtmp_session_t *s, ngx_rtmp_close_stream_t *v)
 	if (ctx->publisher) {
 
 		ngx_rtmp_hls_close_fragment(s, 1, 0);
-
-		ngx_rtmp_hls_restore_m3u8(s);
 	}
 
 	if (ctx->hls_stream->ctx) {
@@ -2261,8 +2262,6 @@ ngx_rtmp_hls_stream_eof(ngx_rtmp_session_t *s, ngx_rtmp_stream_eof_t *v)
 
     ngx_rtmp_hls_close_fragment(s, 1, 0);
 
-	ngx_rtmp_hls_restore_m3u8(s);
-
     return next_stream_eof(s, v);
 }
 
@@ -2369,7 +2368,7 @@ ngx_rtmp_hls_cleanup_dir(ngx_str_t *ppath, ngx_msec_t playlen)
                              name.data[name.len - 2] == 't' &&
                              name.data[name.len - 1] == 's')
         {
-            max_age = playlen / 500;
+            max_age = playlen / 100;
 
         } else if (name.len >= 5 && name.data[name.len - 5] == '.' &&
                                     name.data[name.len - 4] == 'm' &&
@@ -2377,7 +2376,7 @@ ngx_rtmp_hls_cleanup_dir(ngx_str_t *ppath, ngx_msec_t playlen)
                                     name.data[name.len - 2] == 'u' &&
                                     name.data[name.len - 1] == '8')
         {
-            max_age = playlen / 1000;
+            max_age = playlen / 200;
 
         } else {
             ngx_log_debug1(NGX_LOG_DEBUG_RTMP, ngx_cycle->log, 0,

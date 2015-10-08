@@ -608,6 +608,16 @@ ngx_rtmp_cmd_publish_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 static ngx_int_t
 ngx_rtmp_cmd_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
 {
+	if (s->relay_type != NGX_NONE_RELAY) {
+
+		return NGX_OK;
+	}
+
+	if (ngx_rtmp_fire_event(s, NGX_RTMP_AUTH_DONE, NULL, NULL) != NGX_OK)
+    {
+        ngx_rtmp_finalize_session(s);
+    }
+
     return NGX_OK;
 }
 
@@ -714,7 +724,7 @@ ngx_rtmp_cmd_play_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 		if (found != 1) {
 
 			ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, 
-				"publish: vhost='%V' play vhost is error", &s->host_in);
+				"play: vhost='%V' play vhost is error", &s->host_in);
 
 			return NGX_ERROR;
 		}
@@ -839,8 +849,8 @@ ngx_rtmp_cmd_pause_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     }
 
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
-                   "pause: vhost='%V' app='%V' name='%V' pause=%i position=%i",
-                    &s->host_in ,&s->app,&s->name,(ngx_int_t) v.pause, (ngx_int_t) v.position);
+                   "pause: vhost='%V' app='%V' name=%s pause=%i position=%i",
+                    &s->host_in, &s->app, s->name,(ngx_int_t) v.pause, (ngx_int_t) v.position);
 
     return ngx_rtmp_pause(s, &v);
 }
