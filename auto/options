@@ -113,7 +113,7 @@ MAIL_POP3=YES
 MAIL_IMAP=YES
 MAIL_SMTP=YES
 
-NGX_ADDONS='./src/lua ./src/rtmp'
+NGX_ADDONS='./src/rtmp'
 
 USE_PCRE=NO
 PCRE=NONE

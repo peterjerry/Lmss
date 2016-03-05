@@ -118,13 +118,13 @@ typedef enum {
 
 struct ngx_connection_s {
     void               *data;
-	void               *hls_data;
+	void               *http_data;
     ngx_event_t        *read;
     ngx_event_t        *write;
 
     ngx_socket_t        fd;
 
-	ngx_hls_closer_pt   hls_closer;
+	ngx_hls_closer_pt   rtmp_closer;
     ngx_recv_pt         recv;
     ngx_send_pt         send;
     ngx_recv_chain_pt   recv_chain;
@@ -138,7 +138,6 @@ struct ngx_connection_s {
 	ngx_log_t          *hls_log;
 
     ngx_pool_t         *pool;
-	ngx_pool_t         *hls_pool;
 
     struct sockaddr    *sockaddr;
     socklen_t           socklen;
@@ -161,7 +160,7 @@ struct ngx_connection_s {
 
     ngx_uint_t          requests;
 
-	unsigned            hls:2;
+	unsigned            protocol:4;
     unsigned            buffered:8;
 
 	unsigned            hls_log_error:3;
@@ -204,7 +203,7 @@ ngx_listening_t *ngx_create_listening(ngx_conf_t *cf, void *sockaddr,
 ngx_int_t ngx_set_inherited_sockets(ngx_cycle_t *cycle);
 ngx_int_t ngx_open_listening_sockets(ngx_cycle_t *cycle);
 void ngx_configure_listening_sockets(ngx_cycle_t *cycle);
-void ngx_close_listening_sockets(ngx_cycle_t *cycle);
+void ngx_close_listening_sockets(ngx_cycle_t *cycle,  ngx_uint_t type); //0: close net socket, 1: closing unix socket, others:close all socket
 void ngx_close_connection(ngx_connection_t *c);
 ngx_int_t ngx_connection_local_sockaddr(ngx_connection_t *c, ngx_str_t *s,
     ngx_uint_t port);

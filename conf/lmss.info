@@ -1,0 +1,2 @@
+cluster_id             0;               ## 此服务器所属的集群ID
+nginx_id               0;               ## 此服务器ID

@@ -69,6 +69,13 @@ ngx_rtmp_send_shared_packet(ngx_rtmp_session_t *s, ngx_chain_t *cl)
 
     cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
 
+    if (!ngx_rtmp_type(s->protocol)) {
+
+        ngx_rtmp_free_shared_chain(cscf, cl);
+
+        return NGX_OK;
+    }
+
     rc = ngx_rtmp_send_message(s, cl, 0);
 
     ngx_rtmp_free_shared_chain(cscf, cl);
@@ -490,6 +497,56 @@ ngx_rtmp_send_amf(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 {
     return ngx_rtmp_send_shared_packet(s,
            ngx_rtmp_create_amf(s, h, elts, nelts));
+}
+
+
+ngx_int_t 
+ngx_rtmp_send_ret_status(ngx_rtmp_session_t *s, char *code, char *desc)
+{
+	return ngx_rtmp_send_shared_packet(s,
+	   ngx_rtmp_create_ret_status(s, code, desc));
+}
+
+
+ngx_chain_t *
+ngx_rtmp_create_ret_status(ngx_rtmp_session_t *s, char *code, char *desc)
+{
+    ngx_rtmp_header_t               h;
+
+    static ngx_rtmp_amf_elt_t       out_inf[] = {
+    
+         { NGX_RTMP_AMF_STRING,
+         ngx_string("code"),
+         NULL, 0 },
+         
+         { NGX_RTMP_AMF_STRING,
+         ngx_string("description"),
+         NULL, 0 },
+    };
+
+    static ngx_rtmp_amf_elt_t out_elts[] = {
+
+    	{ NGX_RTMP_AMF_STRING,
+    	  ngx_null_string,
+    	  "_result", 0 },
+    
+    	{ NGX_RTMP_AMF_OBJECT,
+    	  ngx_null_string,
+    	  out_inf,
+    	  sizeof(out_inf) },
+    };
+
+    out_inf[0].data = code;
+    out_inf[1].data = desc;
+    
+    ngx_memset(&h, 0, sizeof(h));
+    
+    h.type = NGX_RTMP_MSG_AMF_CMD;
+    h.csid = NGX_RTMP_CSID_AMF;
+    h.msid = NGX_RTMP_MSID;
+    
+    return ngx_rtmp_create_amf(s, &h, out_elts,
+    						   sizeof(out_elts) / sizeof(out_elts[0]));
 }
 
 

@@ -6,7 +6,9 @@
 
 #include <ngx_config.h>
 #include <ngx_core.h>
+#include "ngx_http.h"
 #include "ngx_rtmp.h"
+#include "ngx_http_request.h"
 #include "ngx_rtmp_proxy_protocol.h"
 #include "ngx_rtmp_init.h"
 
@@ -144,6 +146,7 @@ ngx_rtmp_init_session(ngx_connection_t *c, ngx_rtmp_addr_conf_t *addr_conf)
 {
     ngx_rtmp_session_t             *s;
     ngx_rtmp_core_srv_conf_t       *cscf;
+	ngx_rtmp_core_main_conf_t      *cmcf;
     ngx_rtmp_error_log_ctx_t       *ctx;
 
     s = ngx_pcalloc(c->pool, sizeof(ngx_rtmp_session_t) +
@@ -188,7 +191,8 @@ ngx_rtmp_init_session(ngx_connection_t *c, ngx_rtmp_addr_conf_t *addr_conf)
     }
 
     cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
-
+	
+	s->rtmp_stream_status = NGX_RTMP_STREAM_STATUS_ACCEPT;
     s->out_queue = cscf->out_queue;
     s->out_cork = cscf->out_cork;
     s->in_streams = ngx_pcalloc(c->pool, sizeof(ngx_rtmp_stream_t)
@@ -203,11 +207,16 @@ ngx_rtmp_init_session(ngx_connection_t *c, ngx_rtmp_addr_conf_t *addr_conf)
     s->buflen = cscf->buflen;
     ngx_rtmp_set_chunk_size(s, NGX_RTMP_DEFAULT_CHUNK_SIZE);
 
-
     if (ngx_rtmp_fire_event(s, NGX_RTMP_CONNECT, NULL, NULL) != NGX_OK) {
         ngx_rtmp_finalize_session(s);
         return NULL;
     }
+
+	/** to init the session event'log **/
+	cmcf = ngx_rtmp_get_module_main_conf(s, ngx_rtmp_core_module );
+    s->connect_time = ngx_time();  // record the start time
+	s->is_drm 		= NGX_RTMP_STREAM_NDRM;
+	s->is_public	= NGX_RTMP_STREAM_PRIVATE;
 
     return s;
 }
@@ -309,18 +318,24 @@ ngx_rtmp_finalize_session(ngx_rtmp_session_t *s)
     ngx_connection_t   *c;
 
     c = s->connection;
-    if (c->destroyed && !s->hls) {
+    if (c->destroyed) {
         return;
     }
 
     ngx_log_error(NGX_LOG_ERR, c->log, 0, "rtmp finalize session");
 
-    c->destroyed = 1;
-    e = &s->close;
-    e->data = s;
-    e->handler = ngx_rtmp_close_session_handler;
-    e->log = c->log;
+    if (ngx_rtmp_type(s->protocol)) {
 
-    ngx_post_event(e, &ngx_posted_events);
+        c->destroyed = 1;
+        e = &s->close;
+        e->data = s;
+        e->handler = ngx_rtmp_close_session_handler;
+        e->log = c->log;
+
+        ngx_post_event(e, &ngx_posted_events);
+    } else {
+
+        ngx_http_finalize_request(s->r, NGX_HTTP_OK);
+    }
 }
 

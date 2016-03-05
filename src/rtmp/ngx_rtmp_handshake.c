@@ -374,7 +374,7 @@ ngx_rtmp_handshake_recv(ngx_event_t *rev)
     ngx_buf_t                  *b;
 
     c = rev->data;
-    s = c->hls ? c->hls_data : c->data;
+    s = c->data;
 
     if (c->destroyed) {
         return;
@@ -426,7 +426,7 @@ ngx_rtmp_handshake_recv(ngx_event_t *rev)
     ++s->hs_stage;
     ngx_log_debug1(NGX_LOG_DEBUG_RTMP, c->log, 0,
             "ngx_rtmp_handshake_recv:handshake: stage %ui", s->hs_stage);
-
+	
     switch (s->hs_stage) {
         case NGX_RTMP_HANDSHAKE_SERVER_SEND_CHALLENGE:
             if (ngx_rtmp_handshake_parse_challenge(s,
@@ -449,13 +449,18 @@ ngx_rtmp_handshake_recv(ngx_event_t *rev)
             {
                 ngx_log_error(NGX_LOG_INFO, c->log, 0,
                         "handshake: error creating challenge");
+				ngx_rtmp_billing_event_write(s, "HandShake-S0-S1-S2", "handshake:_error_creating_challenge", 501);
                 ngx_rtmp_finalize_session(s);
                 return;
             }
-            ngx_rtmp_handshake_send(c->write);
+
+			ngx_rtmp_handshake_send(c->write);
+
+			ngx_rtmp_billing_event_write(s, "HandShake-S0-S1-S2", "Success", 200);
             break;
 
         case NGX_RTMP_HANDSHAKE_SERVER_DONE:
+			ngx_rtmp_billing_event_write(s, "HandShake-Done", "Success", 200);
             ngx_rtmp_handshake_done(s);
             break;
 
@@ -466,6 +471,7 @@ ngx_rtmp_handshake_recv(ngx_event_t *rev)
             {
                 ngx_log_error(NGX_LOG_INFO, c->log, 0,
                         "handshake: error parsing challenge");
+				ngx_rtmp_billing_event_write(s, "HandShake-S0-S1-S2", "Failed_:_handshake:_error_parsing_challenge", 501);
                 ngx_rtmp_finalize_session(s);
                 return;
             }
@@ -477,10 +483,12 @@ ngx_rtmp_handshake_recv(ngx_event_t *rev)
             if (ngx_rtmp_handshake_create_response(s) != NGX_OK) {
                 ngx_log_error(NGX_LOG_INFO, c->log, 0,
                         "handshake: response error");
+				ngx_rtmp_billing_event_write(s, "HandShake-C2 ", "Failed_:_handshake:_response_error", 501);
                 ngx_rtmp_finalize_session(s);
                 return;
             }
             ngx_rtmp_handshake_send(c->write);
+			ngx_rtmp_billing_event_write(s, "HandShake-C2 ", "Success", 200);
             break;
     }
 }
@@ -495,7 +503,7 @@ ngx_rtmp_handshake_send(ngx_event_t *wev)
     ngx_buf_t                  *b;
 
     c = wev->data;
-    s = c->hls ? c->hls_data : c->data;
+    s = c->data;
 
     if (c->destroyed) {
         return;
@@ -593,6 +601,8 @@ ngx_rtmp_handshake(ngx_rtmp_session_t *s)
 
     s->hs_buf = ngx_rtmp_alloc_handshake_buffer(s);
     s->hs_stage = NGX_RTMP_HANDSHAKE_SERVER_RECV_CHALLENGE;
+
+	ngx_rtmp_billing_event_write(s, "HandShake-Client-C0", "Success", 200);
 
     ngx_rtmp_handshake_recv(c->read);
 }

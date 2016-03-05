@@ -9,7 +9,7 @@
 
 
 #define nginx_rtmp_version  1003000
-#define NGINX_RTMP_VERSION  "1.4.0.6"
+#define NGINX_RTMP_VERSION  "1.5.1.1"
 
 
 #endif /* _NGX_RTMP_VERSION_H_INCLUDED_ */

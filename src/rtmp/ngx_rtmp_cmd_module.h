@@ -14,10 +14,25 @@
 #include "ngx_rtmp.h"
 
 
+#define NGX_RTMP_CMD_HLS_PLAY     0
+#define NGX_RTMP_CMD_HDL_PLAY     1
+#define NGX_RTMP_CMD_RTMP_PLAY    2
+#define NGX_RTMP_CMD_RTMP_PUBLISH 3
+
+
 #define NGX_RTMP_MAX_NAME           256
 #define NGX_RTMP_MAX_URL            256
+#define NGX_RTMP_MAX_CONFIG         2048
 #define NGX_RTMP_MAX_ARGS           NGX_RTMP_MAX_NAME
 
+#define NGX_RTMP_SET_STRPAR(name) \
+    do { \
+        s->name.len = ngx_strlen(v.name); \
+        if (s->name.len > 0) { \
+            s->name.data = ngx_palloc(s->connection->pool, s->name.len); \
+            ngx_memcpy(s->name.data, v.name, s->name.len); \
+        } \
+    }while(0)
 
 /* Basic RTMP call support */
 
@@ -32,7 +47,6 @@ typedef struct {
     double                          vcodecs;
     u_char                          page_url[NGX_RTMP_MAX_URL];
     double                          object_encoding;
-    /*Added by Jason Chang*/
     ngx_uint_t                      relay_type;
 } ngx_rtmp_connect_t;
 
@@ -111,8 +125,10 @@ ngx_rtmp_cmd_parse_tcurl(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v);
 ngx_int_t
 ngx_rtmp_cmd_start_play(ngx_rtmp_session_t *s, ngx_rtmp_play_t *v);
 ngx_int_t
-ngx_rtmp_cmd_start_close(ngx_rtmp_session_t *s, ngx_rtmp_close_stream_t *v);
-
+ngx_rtmp_cmd_start_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v);
+ngx_int_t
+ngx_rtmp_cmd_get_core_srv_conf(ngx_rtmp_session_t *s, ngx_int_t type, ngx_str_t *host, ngx_str_t *app,
+    ngx_rtmp_core_srv_conf_t **pcscf, ngx_rtmp_core_app_conf_t **pcacf);
 
 
 typedef ngx_int_t (*ngx_rtmp_connect_pt)(ngx_rtmp_session_t *s,

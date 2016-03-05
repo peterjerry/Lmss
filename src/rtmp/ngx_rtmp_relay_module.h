@@ -19,20 +19,24 @@
 typedef struct {
     ngx_url_t                       url;
     ngx_str_t                       app;
+    ngx_str_t                       args;
     ngx_str_t                       name;
     ngx_str_t                       tc_url;
     ngx_str_t                       page_url;
     ngx_str_t                       swf_url;
     ngx_str_t                       flash_ver;
     ngx_str_t                       play_path;
+    ngx_str_t                       host_in;
+    ngx_int_t                       port_in;
     ngx_int_t                       live;
     ngx_int_t                       start;
     ngx_int_t                       stop;
-
+    ngx_dynamic_config_t           *conf;
+    
     void                           *tag;     /* usually module reference */
     void                           *data;    /* module-specific data */
     ngx_uint_t                      counter; /* mutable connection counter */
-
+    
     ngx_uint_t                      relay_type;
     ngx_uint_t                      keep_relay;
     ngx_addr_t                     *local;
@@ -45,10 +49,8 @@ typedef struct ngx_rtmp_relay_ctx_s ngx_rtmp_relay_ctx_t;
 struct ngx_rtmp_relay_ctx_s {
     ngx_str_t                       name;
     ngx_str_t                       url;
-	ngx_str_t                       host;
-	ngx_str_t                       relay_uri;
-	ngx_str_t                       h_host;
-	ngx_int_t                       h_port;
+    ngx_str_t                       host;
+    ngx_str_t                       relay_uri;
     ngx_log_t                       log;
     ngx_rtmp_session_t             *session;
     ngx_rtmp_relay_ctx_t           *publish;
@@ -56,18 +58,21 @@ struct ngx_rtmp_relay_ctx_s {
     ngx_rtmp_relay_ctx_t           *next;
 
     ngx_str_t                       app;
+    ngx_str_t                       args;
     ngx_str_t                       tc_url;
     ngx_str_t                       page_url;
     ngx_str_t                       swf_url;
     ngx_str_t                       flash_ver;
     ngx_str_t                       play_path;
+    ngx_str_t                       host_in;
+    ngx_int_t                       port_in;
     ngx_int_t                       live;
     ngx_int_t                       start;
     ngx_int_t                       stop;
-    /*Added by Jason Chang*/
     ngx_uint_t                      relay_type;
-
-	ngx_event_t                     hold_evt;
+    ngx_dynamic_config_t           *conf;
+    
+    ngx_event_t                     hold_evt;
     ngx_event_t                     push_evt;
     ngx_event_t                    *static_evt;
     void                           *tag;

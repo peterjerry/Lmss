@@ -580,8 +580,8 @@ ngx_rtmp_codec_reconstruct_meta(ngx_rtmp_session_t *s)
     static ngx_rtmp_amf_elt_t       out_inf[] = {
 
         { NGX_RTMP_AMF_STRING,
-          ngx_string("Server"),
-          "lmss(www.ksyun.com)", 0 },
+          ngx_string("version"),
+          NGINX_VER, 0 },
 
         { NGX_RTMP_AMF_NUMBER,
           ngx_string("width"),
@@ -676,7 +676,9 @@ ngx_rtmp_codec_reconstruct_meta(ngx_rtmp_session_t *s)
         return NGX_ERROR;
     }
 
-    return ngx_rtmp_codec_prepare_meta(s, 0);
+    ngx_rtmp_codec_prepare_meta(s, 0);
+
+    return NGX_OK;
 }
 
 

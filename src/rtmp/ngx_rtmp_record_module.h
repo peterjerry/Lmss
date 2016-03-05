@@ -19,6 +19,12 @@
 #define NGX_RTMP_RECORD_KEYFRAMES       0x08
 #define NGX_RTMP_RECORD_MANUAL          0x10
 
+//using in remote conf 
+typedef enum {
+     NGX_RTMP_REC_CTX_TYPE_INIT = 0,
+     NGX_RTMP_REC_CTX_TYPE_PIC,
+     NGX_RTMP_REC_CTX_TYPE_MP4
+} ngx_rtmp_rec_ctx_type_e;
 
 typedef struct {
     ngx_str_t                           id;
@@ -39,7 +45,6 @@ typedef struct {
     ngx_str_t                           bucket;
     ngx_str_t                           notify_url;
     size_t                              vdoid;
-    //ngx_flag_t                          is_write_indexfile;
 
     void                              **rec_conf;
     ngx_array_t                         rec; /* ngx_rtmp_record_app_conf_t * */
@@ -48,8 +53,10 @@ typedef struct {
 
 typedef struct {
     ngx_rtmp_record_app_conf_t         *conf;
+    ngx_rtmp_rec_ctx_type_e             type;          // for remote conf
     ngx_file_t                          file, file_index;
     ngx_uint_t                          nframes;
+    ngx_int_t                           interval;      // for remote conf
     u_char                              *abs_path;
     u_char                              *publish_time;
     uint32_t                            epoch, time_shift;
@@ -67,11 +74,12 @@ typedef struct {
 
 typedef struct {
     ngx_array_t                         rec; /* ngx_rtmp_record_rec_ctx_t */
+    ngx_uint_t                          counts;
     u_char                              name[NGX_RTMP_MAX_NAME];
     u_char                              args[NGX_RTMP_MAX_ARGS];
-    u_char                              full_path[NGX_MAX_PATH];
-    u_char                              public_time[256];
-    ngx_file_t                          file_index;
+    u_char                              abs_path[NGX_MAX_PATH];
+    u_char                              publish_time[256];
+    ngx_file_t                          file, file_index;
 } ngx_rtmp_record_ctx_t;
 
 

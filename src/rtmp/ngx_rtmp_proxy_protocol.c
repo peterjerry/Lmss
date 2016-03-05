@@ -60,7 +60,7 @@ ngx_rtmp_proxy_protocol_recv(ngx_event_t *rev)
     ngx_rtmp_session_t  *s;
 
     c = rev->data;
-    s = c->hls ? c->hls_data : c->data;
+    s = c->data;
 
     if (c->destroyed) {
         return;

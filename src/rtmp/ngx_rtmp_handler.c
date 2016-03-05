@@ -11,8 +11,6 @@
 #include "ngx_rtmp_live_module.h"
 
 
-static void ngx_rtmp_recv(ngx_event_t *rev);
-static void ngx_rtmp_send(ngx_event_t *rev);
 static void ngx_rtmp_ping(ngx_event_t *rev);
 static ngx_int_t ngx_rtmp_finalize_set_chunk_size(ngx_rtmp_session_t *s);
 
@@ -156,7 +154,7 @@ ngx_rtmp_ping(ngx_event_t *pev)
     ngx_rtmp_core_srv_conf_t   *cscf;
 
     c = pev->data;
-    s = c->hls ? c->hls_data : c->data;
+    s = !ngx_rtmp_pull_type(c->protocol) ? c->http_data : c->data;
 
     cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
 
@@ -193,7 +191,7 @@ ngx_rtmp_ping(ngx_event_t *pev)
 }
 
 
-static void
+void
 ngx_rtmp_recv(ngx_event_t *rev)
 {
     ngx_int_t                   n;
@@ -210,7 +208,7 @@ ngx_rtmp_recv(ngx_event_t *rev)
     uint32_t                    csid, timestamp;
 
     c = rev->data;
-    s = c->hls ? c->hls_data : c->data;
+    s = !ngx_rtmp_type(c->protocol) ? c->http_data : c->data;
     b = NULL;
     old_pos = NULL;
     old_size = 0;
@@ -492,7 +490,7 @@ ngx_rtmp_recv(ngx_event_t *rev)
 }
 
 
-static void
+void
 ngx_rtmp_send(ngx_event_t *wev)
 {
     ngx_connection_t           *c;
@@ -502,7 +500,7 @@ ngx_rtmp_send(ngx_event_t *wev)
     ngx_rtmp_live_ctx_t 	   *ctx; 
 
     c = wev->data;
-    s = c->hls ? c->hls_data : c->data;
+    s = !ngx_rtmp_type(c->protocol) ? c->http_data : c->data;
 
     if (c->destroyed) {
         return;
@@ -552,7 +550,7 @@ ngx_rtmp_send(ngx_event_t *wev)
 
 		if (ctx && ctx->stream) {
 
-			if (ngx_memcmp(s->flashver.data, NGX_RTMP_RELAY_NAME, ngx_strlen(NGX_RTMP_RELAY_NAME)) != 0) {
+			if (s->relay_type == NGX_NONE_RELAY) {
 
 				ngx_rtmp_update_bandwidth(&ctx->stream->bw_billing_out, n);
 			}
@@ -733,8 +731,11 @@ ngx_rtmp_send_message(ngx_rtmp_session_t *s, ngx_chain_t *out,
 {
     ngx_uint_t                      nmsg;
 
-	if (s->hls)
-		return NGX_OK;
+    if (!ngx_rtmp_type(s->protocol)) {
+
+        ngx_rtmp_acquire_shared_chain(out);
+        return NGX_OK;
+    }
 
     nmsg = (s->out_last - s->out_pos) % s->out_queue + 1;
 
@@ -745,9 +746,14 @@ ngx_rtmp_send_message(ngx_rtmp_session_t *s, ngx_chain_t *out,
     /* drop packet?
      * Note we always leave 1 slot free */
     if (nmsg + priority * s->out_queue / 4 >= s->out_queue) {
+    /*
         ngx_log_debug2(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
                 "RTMP drop message bufs=%ui, priority=%ui",
                 nmsg, priority);
+    */
+        ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+            "RTMP drop message bufs=%ui, priority=%ui, s->out_last=%d, s->out_pos=%d, s->out_queue=%d ",
+            nmsg, priority, s->out_last, s->out_pos, s->out_queue);
         return NGX_AGAIN;
     }
 
@@ -765,8 +771,8 @@ ngx_rtmp_send_message(ngx_rtmp_session_t *s, ngx_chain_t *out,
     }
 
     if (!s->connection->write->active) {
+
         ngx_rtmp_send(s->connection->write);
-        /*return ngx_add_event(s->connection->write, NGX_WRITE_EVENT, NGX_CLEAR_EVENT);*/
     }
 
     return NGX_OK;

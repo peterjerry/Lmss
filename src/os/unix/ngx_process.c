@@ -9,7 +9,7 @@
 #include <ngx_core.h>
 #include <ngx_event.h>
 #include <ngx_channel.h>
-
+#include "ngx_rtmp.h"
 
 typedef struct {
     int     signo;
