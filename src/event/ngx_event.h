@@ -235,6 +235,7 @@ typedef struct {
     void       (*done)(ngx_cycle_t *cycle);
 } ngx_event_actions_t;
 
+
 extern ngx_event_actions_t   ngx_event_actions;
 
 

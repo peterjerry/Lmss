@@ -8,7 +8,6 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_event.h>
-#include <nginx.h>
 
 
 ngx_os_io_t  ngx_io;
@@ -312,13 +311,6 @@ ngx_open_listening_sockets(ngx_cycle_t *cycle)
     ngx_socket_t      s;
     ngx_listening_t  *ls;
 
-    size_t                len;
-    struct sockaddr      *sockaddr;
-    struct sockaddr_in   *sin;
-#if (NGX_HAVE_INET6)
-    struct sockaddr_in6  *sin6;
-#endif
-
     reuseaddr = 1;
 #if (NGX_SUPPRESS_WARN)
     failed = 0;
@@ -341,57 +333,6 @@ ngx_open_listening_sockets(ngx_cycle_t *cycle)
             }
 
             if (ls[i].fd != (ngx_socket_t) -1) {
-                continue;
-            }
-
-            sockaddr = ls[i].sockaddr;
-
-            if (ngx_process == NGX_PROCESS_WORKER) {
-
-                if (!ls[i].per_worker) {
-                    continue;
-                }
-
-                sockaddr = ngx_palloc(cycle->pool, ls[i].socklen);
-                if (sockaddr == NULL) {
-                    return NGX_ERROR;
-                }
-
-                ngx_memcpy(sockaddr, ls[i].sockaddr, ls[i].socklen);
-
-                switch (ls[i].sockaddr->sa_family) {
-#if (NGX_HAVE_INET6)
-                    case AF_INET6:
-                        sin6 = (struct sockaddr_in6 *) sockaddr;
-                        sin6->sin6_port = htons(ntohs(sin6->sin6_port) +
-                                          ngx_worker_slot);
-                        break;
-#endif
-                    default: /* AF_INET */
-                        sin = (struct sockaddr_in *) sockaddr;
-                        sin->sin_port = htons(ntohs(sin->sin_port) +
-                                        ngx_worker_slot);
-                }
-
-                len = ls[i].addr_text_max_len;
-                ls[i].addr_text.data = ngx_palloc(cycle->pool, len);
-
-                if (ls[i].addr_text.data == NULL) {
-                    return NGX_ERROR;
-                }
-
-                len = ngx_sock_ntop(sockaddr,
-#if (nginx_version >= 1005003)
-				    ls[i].socklen,
-#endif
-				    ls[i].addr_text.data, len, 1);
-                if (len == 0) {
-                    return NGX_ERROR;
-                }
-
-                ls[i].addr_text.len = len;
-
-            } else if (ls[i].per_worker) {
                 continue;
             }
 
@@ -467,7 +408,7 @@ ngx_open_listening_sockets(ngx_cycle_t *cycle)
             ngx_log_debug2(NGX_LOG_DEBUG_CORE, log, 0,
                            "bind() %V #%d ", &ls[i].addr_text, s);
 
-            if (bind(s, sockaddr, ls[i].socklen) == -1) {
+            if (bind(s, ls[i].sockaddr, ls[i].socklen) == -1) {
                 err = ngx_socket_errno;
 
                 if (err == NGX_EADDRINUSE && ngx_test_config) {
@@ -803,12 +744,11 @@ ngx_configure_listening_sockets(ngx_cycle_t *cycle)
 
 
 void
-ngx_close_listening_sockets(ngx_cycle_t *cycle, ngx_uint_t type)
+ngx_close_listening_sockets(ngx_cycle_t *cycle)
 {
     ngx_uint_t         i;
     ngx_listening_t   *ls;
     ngx_connection_t  *c;
-    ngx_uint_t         count=0;
 
     if (ngx_event_flags & NGX_USE_IOCP_EVENT) {
         return;
@@ -820,25 +760,8 @@ ngx_close_listening_sockets(ngx_cycle_t *cycle, ngx_uint_t type)
     ls = cycle->listening.elts;
     for (i = 0; i < cycle->listening.nelts; i++) {
 
-        if (type == 0) {       //net socket
-        
-            if (ls[i].sockaddr->sa_family == AF_UNIX){
-            
-                continue;
-            }
-        }else if (type == 1) {//unix socket
-
-            if (ls[i].sockaddr->sa_family != AF_UNIX){
-            
-                continue;
-            }
-        }else {                //all socket
-        
-            //do nothing
-        }
-        ++count;
-		
         c = ls[i].connection;
+
         if (c) {
             if (c->read->active) {
                 if (ngx_event_flags & NGX_USE_RTSIG_EVENT) {
@@ -891,7 +814,7 @@ ngx_close_listening_sockets(ngx_cycle_t *cycle, ngx_uint_t type)
         ls[i].fd = (ngx_socket_t) -1;
     }
 
-    cycle->listening.nelts = cycle->listening.nelts - count;
+    cycle->listening.nelts = 0;
 }
 
 

@@ -701,7 +701,7 @@ ngx_master_process_exit(ngx_cycle_t *cycle)
         }
     }
 
-    ngx_close_listening_sockets(cycle, 2);
+    ngx_close_listening_sockets(cycle);
 
     /*
      * Copy ngx_cycle->log related data to the special static exit cycle,
@@ -738,8 +738,6 @@ ngx_worker_process_cycle(ngx_cycle_t *cycle, void *data)
     ngx_connection_t  *c;
 
     ngx_process = NGX_PROCESS_WORKER;
-
-    ngx_worker_slot = worker;
 
     ngx_worker_process_init(cycle, worker);
 
@@ -832,7 +830,7 @@ ngx_worker_process_cycle(ngx_cycle_t *cycle, void *data)
             ngx_setproctitle("worker process is shutting down");
 
             if (!ngx_exiting) {
-                ngx_close_listening_sockets(cycle, 0); // close net socket
+                ngx_close_listening_sockets(cycle);
                 ngx_exiting = 1;
             }
         }
@@ -974,12 +972,6 @@ ngx_worker_process_init(ngx_cycle_t *cycle, ngx_int_t worker)
         ls[i].previous = NULL;
     }
 
-    if (ngx_open_listening_sockets(cycle) != NGX_OK) {
-        ngx_log_error(NGX_LOG_ALERT, cycle->log, ngx_errno,
-                      "failed to init worker listeners");
-        exit(2);
-    }
-
     for (i = 0; ngx_modules[i]; i++) {
         if (ngx_modules[i]->init_process) {
             if (ngx_modules[i]->init_process(cycle) == NGX_ERROR) {
@@ -1039,8 +1031,6 @@ ngx_worker_process_exit(ngx_cycle_t *cycle)
 
     ngx_wakeup_worker_threads(cycle);
 #endif
-
-	ngx_close_listening_sockets(cycle, 1); // close unix socket
 
     for (i = 0; ngx_modules[i]; i++) {
         if (ngx_modules[i]->exit_process) {
@@ -1327,7 +1317,7 @@ ngx_cache_manager_process_cycle(ngx_cycle_t *cycle, void *data)
      */
     ngx_process = NGX_PROCESS_HELPER;
 
-    ngx_close_listening_sockets(cycle, 2); // close all socket
+    ngx_close_listening_sockets(cycle);
 
     /* Set a moderate number of connections for a helper process. */
     cycle->connection_n = 512;

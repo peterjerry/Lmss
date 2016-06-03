@@ -2,6 +2,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include "ngx_rtmp.h"
 
 ngx_int_t
 ngx_rtmp_arg(ngx_str_t args, u_char *name, size_t len, ngx_str_t *value)
@@ -66,6 +67,8 @@ ngx_rtmp_parse_tcurl(ngx_str_t args, ngx_str_t tcurl, ngx_str_t *host_in, ngx_in
     slash = ngx_strlchr(tcurl.data, tcurl.data + tcurl.len, '/');
     if (slash != NULL) {
         last = slash;
+    } else {
+        return NGX_DECLINED;
     }
 
     port = ngx_strlchr(tcurl.data, last, ':');
@@ -106,3 +109,77 @@ ngx_rtmp_parse_host(ngx_pool_t *pool, ngx_str_t hosts, ngx_str_t *host_in, ngx_i
     return NGX_OK;
 }
 
+ngx_int_t
+ngx_rtmp_parse_http_body(ngx_pool_t *pool, ngx_log_t *log, ngx_chain_t* in,
+        u_char *ret, u_char **content, ngx_uint_t *content_length)
+{
+    ngx_uint_t      ncrs;
+    ngx_uint_t      nheader;
+    ngx_buf_t      *b;
+    ngx_chain_t    *in_tmp;
+    u_char         *p;
+
+    if (pool == NULL || ret == NULL || in == NULL
+            || content_length == NULL || content == NULL) {
+        return NGX_ERROR;
+    }
+    //skip header
+    ncrs = 0;
+    nheader = 0;
+    b = NULL;
+    while (in && ncrs != 2) {
+        b = in->buf;
+
+        for (; b->pos != b->last && ncrs != 2; ++b->pos) {
+            switch (*b->pos) {
+                case '\n':
+                    ++ncrs;
+                case '\r':
+                    break;
+                default:
+                    ncrs = 0;
+            }
+            if (++nheader == 10) {
+                *ret = *b->pos;
+                switch (*b->pos) {
+                    case (u_char) '2':
+                        break;
+                    case (u_char) '3':
+                        return NGX_AGAIN;
+                    default:
+                        return NGX_ERROR;
+                }
+            }
+        }
+        if (b->pos == b->last) {
+            in = in->next;
+            b = in->buf;
+        }
+    }
+    
+    if (b->pos == b->last) {
+        in = in->next;
+    }
+
+    in_tmp = in;
+    //countent length
+    *content_length = 0;
+    while (in_tmp) {
+        *content_length += in_tmp->buf->last - in_tmp->buf->pos;
+        in_tmp = in_tmp->next;
+    }
+
+    if (*content_length == 0) {
+        return NGX_OK;
+    }
+
+    *content = ngx_palloc(pool, *content_length);
+    p = *content;
+
+    //copy content
+    while (in) {
+        p = ngx_cpymem(p, in->buf->pos, (in->buf->last - in->buf->pos));
+        in = in->next;
+    }
+    return NGX_OK;
+}

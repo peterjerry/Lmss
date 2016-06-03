@@ -386,13 +386,7 @@ ngx_trylock_accept_mutex(ngx_cycle_t *cycle)
             && ngx_accept_events == 0
             && !(ngx_event_flags & NGX_USE_RTSIG_EVENT))
         {
-		
-            ngx_log_debug0(NGX_LOG_DEBUG_EVENT, cycle->log, 0,
-                           "accept mutex locked: ngx_accept_mutex_held=1, ngx_accept_events=0, !(ngx_event_flags & NGX_USE_RTSIG_EVENT)"
-                           );
-            /* Added by Edward, 2015-02 */
-        
-		    ngx_accept_events = 1;
+            ngx_accept_events = 1;
             ngx_accept_mutex_held = 0;
             ngx_shmtx_unlock(&ngx_accept_mutex);
 

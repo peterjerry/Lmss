@@ -54,7 +54,6 @@ struct ngx_listening_s {
     unsigned            open:1;
     unsigned            remain:1;
     unsigned            ignore:1;
-    unsigned            per_worker:1;
 
     unsigned            bound:1;       /* already bound */
     unsigned            inherited:1;   /* inherited from previous process */
@@ -124,7 +123,6 @@ struct ngx_connection_s {
 
     ngx_socket_t        fd;
 
-	ngx_hls_closer_pt   rtmp_closer;
     ngx_recv_pt         recv;
     ngx_send_pt         send;
     ngx_recv_chain_pt   recv_chain;
@@ -135,7 +133,6 @@ struct ngx_connection_s {
     off_t               sent;
 
     ngx_log_t          *log;
-	ngx_log_t          *hls_log;
 
     ngx_pool_t         *pool;
 
@@ -163,7 +160,6 @@ struct ngx_connection_s {
 	unsigned            protocol:4;
     unsigned            buffered:8;
 
-	unsigned            hls_log_error:3;
     unsigned            log_error:3;     /* ngx_connection_log_error_e */
 
     unsigned            unexpected_eof:1;
@@ -203,7 +199,7 @@ ngx_listening_t *ngx_create_listening(ngx_conf_t *cf, void *sockaddr,
 ngx_int_t ngx_set_inherited_sockets(ngx_cycle_t *cycle);
 ngx_int_t ngx_open_listening_sockets(ngx_cycle_t *cycle);
 void ngx_configure_listening_sockets(ngx_cycle_t *cycle);
-void ngx_close_listening_sockets(ngx_cycle_t *cycle,  ngx_uint_t type); //0: close net socket, 1: closing unix socket, others:close all socket
+void ngx_close_listening_sockets(ngx_cycle_t *cycle);
 void ngx_close_connection(ngx_connection_t *c);
 ngx_int_t ngx_connection_local_sockaddr(ngx_connection_t *c, ngx_str_t *s,
     ngx_uint_t port);

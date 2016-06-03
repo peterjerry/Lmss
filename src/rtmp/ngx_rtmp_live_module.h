@@ -10,11 +10,13 @@
 
 #include <ngx_config.h>
 #include <ngx_core.h>
-#include "ngx_rtmp.h"
+#include <ngx_http.h>
+#include <ngx_rtmp.h>
+#include "ngx_rtmp_log_module.h"
 #include "ngx_rtmp_cmd_module.h"
 #include "ngx_rtmp_bandwidth.h"
 #include "ngx_rtmp_streams.h"
-#include <ngx_http.h>
+#include "ngx_rtmp_hdl_module.h"
 #include "hls/ngx_rtmp_hls_module.h"
 
 
@@ -40,9 +42,9 @@ struct ngx_rtmp_live_gop_cache_s {
     ngx_rtmp_header_t                   h;
     ngx_uint_t                          prio;
     ngx_chain_t                        *frame;
+    ngx_uint_t                          recv_time;
     ngx_rtmp_live_gop_cache_t          *next;
 };
-
 
 struct ngx_rtmp_live_ctx_s {
     ngx_rtmp_session_t                 *session;
@@ -51,6 +53,8 @@ struct ngx_rtmp_live_ctx_s {
     ngx_rtmp_live_stream_t             *stream;
     ngx_rtmp_live_ctx_t                *next;
     ngx_rtmp_live_gop_cache_t          *gop_cache;
+    ngx_rtmp_live_gop_cache_t          *gop_cache_tail;
+    ngx_rtmp_bandwidth_t                bw_out;
     ngx_pool_t                         *gop_pool;
     ngx_uint_t                          cached_video_cnt;
     ngx_uint_t                          audio_after_last_video_cnt;
@@ -64,6 +68,7 @@ struct ngx_rtmp_live_ctx_s {
     unsigned                            silent:1;
     unsigned                            paused:1;
 	unsigned                            protocol:4;
+    unsigned                            sended:1;
 };
 
 
@@ -76,18 +81,14 @@ struct ngx_rtmp_live_stream_s {
     ngx_rtmp_bandwidth_t                bw_in_audio;
     ngx_rtmp_bandwidth_t                bw_in_video;
     ngx_rtmp_bandwidth_t                bw_out;
-    ngx_rtmp_bandwidth_t				bw_billing_in;
-    ngx_rtmp_bandwidth_t				bw_billing_out;
-
+    ngx_rtmp_bandwidth_t                bw_billing_in;
+    ngx_rtmp_bandwidth_t                bw_billing_out;
     ngx_msec_t                          epoch;
-    unsigned                            active:1;
-    unsigned                            publishing:1;
-
-	//for http output , Edward.Wu
-	ngx_http_request_t 				   *http_r;
-
     ngx_event_t                         check_evt;
     ngx_msec_t                          check_evt_msec;
+    ngx_event_t                         flux_evt;
+    unsigned                            active:1;
+    unsigned                            publishing:1;
 };
 
 
@@ -138,18 +139,15 @@ typedef struct {
 } ngx_rtmp_live_main_conf_t;
 
 
-extern ngx_module_t  ngx_rtmp_live_module;
-
-ngx_int_t
-ngx_rtmp_relay_player_dry(ngx_rtmp_session_t *s, ngx_str_t *name);
 ngx_rtmp_live_dyn_srv_t **
 ngx_rtmp_live_get_srv_dynamic(ngx_rtmp_live_main_conf_t *lmcf, ngx_str_t *uniqname, int create);
 ngx_rtmp_live_dyn_app_t **
 ngx_rtmp_live_get_app_dynamic(ngx_rtmp_live_main_conf_t *lmcf, ngx_rtmp_live_dyn_srv_t **srv, ngx_str_t *appname, int create);
 ngx_rtmp_live_stream_t **
 ngx_rtmp_live_get_name_dynamic(ngx_rtmp_live_main_conf_t *lmcf, ngx_rtmp_live_app_conf_t *lacf, ngx_rtmp_live_dyn_app_t **app, ngx_str_t *name, int create);
+void
+ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher);
 
 ngx_rtmp_live_main_conf_t *ngx_rtmp_live_main_conf;
-
 
 #endif /* _NGX_RTMP_LIVE_H_INCLUDED_ */

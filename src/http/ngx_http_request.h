@@ -276,6 +276,7 @@ typedef struct {
 
 
 typedef void (*ngx_http_client_body_handler_pt)(ngx_http_request_t *r);
+typedef void (*ngx_rtmp_http_close_handler_pt)(ngx_http_request_t *r);
 
 typedef struct {
     ngx_temp_file_t                  *temp_file;
@@ -369,6 +370,8 @@ struct ngx_http_request_s {
     ngx_http_event_handler_pt         read_event_handler;
     ngx_http_event_handler_pt         write_event_handler;
 
+    ngx_rtmp_http_close_handler_pt    rtmp_http_close_handler;
+
 #if (NGX_HTTP_CACHE)
     ngx_http_cache_t                 *cache;
 #endif
@@ -410,7 +413,6 @@ struct ngx_http_request_s {
 
     ngx_int_t                         phase_handler;
     ngx_http_handler_pt               content_handler;
-	ngx_http_handler_pt               keepalived_handler;
     ngx_uint_t                        access_code;
 
     ngx_http_variable_value_t        *variables;

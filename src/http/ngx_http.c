@@ -1817,8 +1817,6 @@ ngx_http_add_listening(ngx_conf_t *cf, ngx_http_conf_addr_t *addr)
     ls->fastopen = addr->opt.fastopen;
 #endif
 
-    ls->per_worker = addr->opt.per_worker;
-
     return ls;
 }
 

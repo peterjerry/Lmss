@@ -2897,10 +2897,6 @@ ngx_http_set_keepalive(ngx_http_request_t *r)
     /* guard against recursive call from ngx_http_finalize_connection() */
     r->keepalive = 0;
 
-	if (r->keepalived_handler) {
-		r->keepalived_handler(r);
-	}
-
     ngx_http_free_request(r, 0);
 
     c->data = hc;
@@ -3403,6 +3399,10 @@ ngx_http_close_request(ngx_http_request_t *r, ngx_int_t rc)
         return;
     }
 
+    if (r->rtmp_http_close_handler) {
+        r->rtmp_http_close_handler(r);
+    }
+
 #if (NGX_HTTP_SPDY)
     if (r->spdy_stream) {
         ngx_http_spdy_close_stream(r->spdy_stream, rc);
@@ -3528,10 +3528,6 @@ ngx_http_close_connection(ngx_connection_t *c)
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
                    "close http connection: %d", c->fd);
-
-	if (c->rtmp_closer) {
-		c->rtmp_closer(c);
-	}
 
 #if (NGX_HTTP_SSL)
 

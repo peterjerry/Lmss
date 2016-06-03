@@ -18,7 +18,6 @@
 
 
 typedef struct {
-    ngx_str_t                           unique_name;
     uint32_t                            epoch;
     unsigned                            initialized:1;
 } ngx_rtmp_hdl_ctx_t;

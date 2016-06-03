@@ -28,6 +28,10 @@ static char *ngx_rtmp_core_application(ngx_conf_t *cf, ngx_command_t *cmd,
         void *conf);
 static char *ngx_rtmp_core_domains(ngx_conf_t *cf, ngx_command_t *cmd,
         void *conf);
+static char *ngx_rtmp_set_time_update_server(ngx_conf_t *cf, ngx_command_t *cmd,
+        void *conf);
+static char *ngx_rtmp_set_resolver(ngx_conf_t *cf, ngx_command_t *cmd,
+        void *conf);
 
 ngx_rtmp_core_main_conf_t *ngx_rtmp_core_main_conf;
 
@@ -75,6 +79,41 @@ static ngx_command_t  ngx_rtmp_core_commands[] = {
         NGX_RTMP_MAIN_CONF_OFFSET,
         offsetof(ngx_rtmp_core_main_conf_t, nginx_id),
         NULL },
+    
+    { ngx_string("time_server_url"),
+        NGX_RTMP_MAIN_CONF|NGX_CONF_TAKE1,
+        ngx_rtmp_set_time_update_server,
+        0,
+        0,
+        NULL },
+
+    { ngx_string("time_update_interval"),
+        NGX_RTMP_MAIN_CONF|NGX_CONF_TAKE1,
+        ngx_conf_set_msec_slot,
+        NGX_RTMP_MAIN_CONF_OFFSET,
+        offsetof(ngx_rtmp_core_main_conf_t, time_update_evt_msec),
+        NULL },
+
+    { ngx_string("delay_log_interval"),
+        NGX_RTMP_MAIN_CONF|NGX_CONF_TAKE1,
+        ngx_conf_set_msec_slot,
+        NGX_RTMP_MAIN_CONF_OFFSET,
+        offsetof(ngx_rtmp_core_main_conf_t, delay_log_interval),
+        NULL },
+
+    { ngx_string("resolver"),
+        NGX_RTMP_MAIN_CONF|NGX_CONF_TAKE1,
+        ngx_rtmp_set_resolver,
+        0,
+        0,
+        NULL },
+
+    { ngx_string("resolver_timeout"),
+        NGX_RTMP_MAIN_CONF|NGX_CONF_TAKE1,
+        ngx_conf_set_msec_slot,
+        NGX_RTMP_MAIN_CONF_OFFSET,
+        offsetof(ngx_rtmp_core_main_conf_t, resolver_timeout),
+        NULL },
 
     { ngx_string("hls_play_domains"),
         NGX_RTMP_SRV_CONF|NGX_CONF_1MORE,
@@ -102,13 +141,6 @@ static ngx_command_t  ngx_rtmp_core_commands[] = {
         ngx_rtmp_core_domains,
         NGX_RTMP_SRV_CONF_OFFSET,
         0,
-        NULL },
-
-    { ngx_string("unique_name"),
-        NGX_RTMP_SRV_CONF|NGX_CONF_TAKE1,
-        ngx_conf_set_str_slot,
-        NGX_RTMP_SRV_CONF_OFFSET,
-        offsetof(ngx_rtmp_core_srv_conf_t, unique_name),
         NULL },
 
     { ngx_string("load_conf_from"),
@@ -223,6 +255,13 @@ static ngx_command_t  ngx_rtmp_core_commands[] = {
         offsetof(ngx_rtmp_core_srv_conf_t, busy),
         NULL },
 
+    { ngx_string("unique_name"),
+        NGX_RTMP_SRV_CONF|NGX_RTMP_SRV_CONF|NGX_CONF_TAKE1,
+        ngx_conf_set_str_slot,
+        NGX_RTMP_SRV_CONF_OFFSET,
+        offsetof(ngx_rtmp_core_srv_conf_t, unique_name),
+        NULL },
+
     /* time fixes are needed for flash clients */
     { ngx_string("play_time_fix"),
         NGX_RTMP_MAIN_CONF|NGX_RTMP_SRV_CONF|NGX_RTMP_APP_CONF|NGX_CONF_TAKE1,
@@ -307,6 +346,12 @@ ngx_rtmp_core_create_main_conf(ngx_conf_t *cf)
     cmcf->server_names_hash_max_size = NGX_CONF_UNSET_UINT;
     cmcf->server_names_hash_bucket_size = NGX_CONF_UNSET_UINT;
     cmcf->load_conf_from = NGX_CONF_UNSET_UINT;
+    ngx_memzero(&cmcf->time_update_evt, sizeof(cmcf->time_update_evt));
+    cmcf->time_update_evt.data = cmcf;
+    cmcf->time_update_evt_msec = NGX_CONF_UNSET_UINT;
+    cmcf->delay_log_interval = NGX_CONF_UNSET_UINT;
+    cmcf->resolver = NGX_CONF_UNSET_PTR;
+    cmcf->resolver_timeout = NGX_CONF_UNSET_UINT;
 
     return cmcf;
 }
@@ -320,6 +365,10 @@ ngx_rtmp_core_init_main_conf(ngx_conf_t *cf, void *conf)
     ngx_conf_init_uint_value(cmcf->server_names_hash_max_size, 8192);
     ngx_conf_init_uint_value(cmcf->load_conf_from, NGX_RTMP_CORE_LOAD_CONF_LOCAL);
     ngx_conf_init_uint_value(cmcf->server_names_hash_bucket_size, ngx_cacheline_size);
+
+    ngx_conf_init_msec_value(cmcf->time_update_evt_msec, 3600*1000);
+    ngx_conf_init_msec_value(cmcf->resolver_timeout, 30*1000);
+    ngx_conf_init_msec_value(cmcf->delay_log_interval, 0);
 
     cmcf->server_names_hash_bucket_size =
         ngx_align(cmcf->server_names_hash_bucket_size, ngx_cacheline_size);
@@ -408,12 +457,13 @@ ngx_rtmp_core_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_conf_merge_value(conf->chunk_size, prev->chunk_size, 4096);
     ngx_conf_merge_uint_value(conf->ack_window, prev->ack_window, 5000000);
     ngx_conf_merge_size_value(conf->max_message, prev->max_message, 1 * 1024 * 1024);
-    ngx_conf_merge_size_value(conf->out_queue, prev->out_queue, 2048);
+    ngx_conf_merge_size_value(conf->out_queue, prev->out_queue, 512);
     ngx_conf_merge_size_value(conf->out_cork, prev->out_cork, conf->out_queue / 8);
     ngx_conf_merge_value(conf->play_time_fix, prev->play_time_fix, 1);
     ngx_conf_merge_value(conf->publish_time_fix, prev->publish_time_fix, 1);
     ngx_conf_merge_msec_value(conf->buflen, prev->buflen, 1000);
     ngx_conf_merge_value(conf->busy, prev->busy, 0);
+    ngx_conf_merge_str_value(conf->unique_name, prev->unique_name, "");
     ngx_conf_merge_value(conf->rtmp_status_code, prev->rtmp_status_code, 0);
 
     if (prev->pool == NULL) {
@@ -977,3 +1027,63 @@ ngx_rtmp_core_domains(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     return NGX_CONF_OK;
 }
 
+static char *
+ngx_rtmp_set_time_update_server(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+    ngx_str_t                   *value;
+    ngx_url_t                   *url;
+    ngx_rtmp_core_main_conf_t   *cmcf;
+
+    cmcf = ngx_rtmp_conf_get_module_main_conf(cf, ngx_rtmp_core_module);
+    value = cf->args->elts;
+    url = &cmcf->time_server_url;
+
+    ngx_memzero(url, sizeof(ngx_url_t));
+    url->url = value[1];
+    if (ngx_strncasecmp(url->url.data, (u_char *) "http://", 7) == 0) {
+        url->url.data += 7;
+        url->url.len -= 7;
+    }
+    url->default_port = 80;
+    url->uri_part = 1;
+    cmcf->time_update_evt.log = &cf->cycle->new_log;
+    
+    if (NGX_OK != ngx_parse_url(cf->pool, url)) {
+        if (url->err) {
+            ngx_conf_log_error(NGX_LOG_ERR, cf, 0,
+                    "%s in \"%V\" of the \"time update server\" directive",
+                    url->err, &url->url);
+        }
+        return NGX_CONF_ERROR;
+    }
+    return NGX_CONF_OK;
+}
+
+static char *
+ngx_rtmp_set_resolver(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+    ngx_str_t                   *value;
+    ngx_rtmp_core_main_conf_t   *cmcf;
+
+    cmcf = ngx_rtmp_conf_get_module_main_conf(cf, ngx_rtmp_core_module);
+
+    if (cmcf->resolver != NGX_CONF_UNSET_PTR) {
+        return "is duplicate";
+    }
+
+    value = cf->args->elts;
+
+    if (ngx_strcmp(value[1].data, "off") == 0) {
+        cmcf->resolver = NULL;
+        return NGX_CONF_OK;
+    }
+
+    cmcf->resolver = ngx_resolver_create(cf, &value[1], cf->args->nelts - 1);
+    if (cmcf->resolver == NULL) {
+        ngx_conf_log_error(NGX_LOG_ERR, cf, 0,
+                "time update resolver create fail!");
+        return NGX_CONF_ERROR;
+    }
+
+    return NGX_CONF_OK;
+}

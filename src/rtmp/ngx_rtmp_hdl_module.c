@@ -9,9 +9,11 @@
 #include <ngx_rtmp.h>
 #include "ngx_rtmp_init.h"
 #include "ngx_rtmp_hdl_module.h"
+#include "ngx_rtmp_log_module.h"
 
 
 extern ngx_uint_t ngx_rtmp_playing;
+ngx_uint_t  ngx_rtmp_hdl_naccepted;
 
 typedef struct {
     ngx_flag_t                          hdl;
@@ -27,10 +29,8 @@ static ngx_int_t ngx_rtmp_hdl_postconfiguration(ngx_conf_t *cf);
 static void * ngx_rtmp_hdl_create_app_conf(ngx_conf_t *cf);
 static char * ngx_rtmp_hdl_merge_app_conf(ngx_conf_t *cf, void *parent, void *child);
 static ngx_int_t ngx_rtmp_http_hdl_get_info(ngx_str_t *uri, ngx_str_t *app, ngx_str_t *name);
-static ngx_int_t ngx_rtmp_http_hdl_close_keepalived(ngx_http_request_t *r);
-static void ngx_rtmp_http_hdl_close_connection(ngx_connection_t *c);
 static ngx_int_t ngx_rtmp_http_hdl_connect_local(ngx_http_request_t *r, ngx_str_t *app, ngx_str_t *name, ngx_int_t protocol);
-static ngx_rtmp_session_t *ngx_rtmp_http_hdl_init_session(ngx_connection_t *c, ngx_rtmp_addr_conf_t *addr_conf);
+static ngx_rtmp_session_t *ngx_rtmp_http_hdl_init_session(ngx_http_request_t *r, ngx_rtmp_addr_conf_t *addr_conf);
 static ngx_int_t ngx_rtmp_http_hdl_init_connection(ngx_http_request_t *r, ngx_rtmp_conf_port_t *cf_port);
 static ngx_int_t ngx_rtmp_hdl_connect_done(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h, ngx_chain_t *in);
 static ngx_int_t ngx_rtmp_hdl_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h, ngx_chain_t *in);
@@ -133,7 +133,6 @@ ngx_rtmp_hdl_send_message(ngx_rtmp_session_t *s, ngx_chain_t *out,
 
     if (!ngx_hdl_type(s->protocol)) {
 
-        ngx_rtmp_acquire_shared_chain(out);
         return NGX_OK;
     }
 
@@ -151,7 +150,7 @@ ngx_rtmp_hdl_send_message(ngx_rtmp_session_t *s, ngx_chain_t *out,
                 "RTMP drop message bufs=%ui, priority=%ui",
                 nmsg, priority);
     */
-        ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+        ngx_log_error(NGX_LOG_WARN, s->connection->log, 0,
             "RTMP drop message bufs=%ui, priority=%ui, s->out_last=%d, s->out_pos=%d, s->out_queue=%d ",
             nmsg, priority, s->out_last, s->out_pos, s->out_queue);
         return NGX_AGAIN;
@@ -196,28 +195,13 @@ ngx_rtmp_http_hdl_get_info(ngx_str_t *uri, ngx_str_t *app, ngx_str_t *name)
 
     for(; uri->data[len] != '/' || uri->len == len; ++ len); // reach next '/'
 
-    app->len  = &uri->data[len ++] - app->data;
-    name->data = &uri->data[len];                            // we got name
+    app->len = &uri->data[len ++] - app->data;
 
-    for(; uri->data[len] != '.' || uri->len == len; ++ len); // reach '.'
-
-    name->len  = &uri->data[len] - name->data;
+    name->data = &uri->data[len];
+    name->len = &uri->data[uri->len] - name->data
+        - ngx_strlen(".flv");                                // we got name
 
     return NGX_OK;
-}
-
-
-static ngx_int_t
-ngx_rtmp_http_hdl_close_keepalived(ngx_http_request_t *r)
-{
-	ngx_rtmp_session_t          *s;
-
-	ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, "hdl close keepalived");
-
-	s = r->connection->http_data;
-	s->r = NULL;
-
-	return NGX_OK;
 }
 
 
@@ -235,16 +219,14 @@ ngx_rtmp_http_hdl_play_local(ngx_http_request_t *r)
 
 	ngx_memzero(&v, sizeof(ngx_rtmp_play_t));
 
-    ngx_memcpy(v.name, s->name.data, s->name.len);
-    ngx_memcpy(v.args, s->args.data, s->args.len);
-
-    s->rtmp_stream_status = NGX_RTMP_STREAM_STATUS_PLAY;
+    ngx_memcpy(v.name, s->name.data, ngx_min(s->name.len, sizeof(v.name) - 1));
+    ngx_memcpy(v.args, s->args.data, ngx_min(s->args.len, sizeof(v.args) - 1));
 
     if (!ngx_rtmp_remote_conf()) {
 
         if (ngx_rtmp_cmd_get_core_srv_conf(s, NGX_RTMP_CMD_HDL_PLAY, &s->host_in, &s->app, &cscf, &cacf) != NGX_OK) {
 
-            ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "hdl_play: forbidden");
+            ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "hdl_play: forbidden");
             return NGX_ERROR;
         }
     } else {
@@ -255,7 +237,6 @@ ngx_rtmp_http_hdl_play_local(ngx_http_request_t *r)
     if (!ngx_rtmp_remote_conf()) {
 
         s->app_conf = cacf->app_conf;
-        s->unique_name = cscf->unique_name;
     } else {
 
         s->app_conf = cscf->ctx->app_conf;
@@ -263,28 +244,24 @@ ngx_rtmp_http_hdl_play_local(ngx_http_request_t *r)
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hdl_module);
     if (ctx == NULL) {
-        ctx = ngx_pcalloc(s->connection->pool, sizeof(ngx_rtmp_hdl_ctx_t));
+        ctx = ngx_pcalloc(s->pool, sizeof(ngx_rtmp_hdl_ctx_t));
         ngx_rtmp_set_ctx(s, ctx, ngx_rtmp_hdl_module);
     }
 
 	return ngx_rtmp_cmd_start_play(s, &v);
 }
 
-
 static void
-ngx_rtmp_http_hdl_close_connection(ngx_connection_t *c)
+ngx_rtmp_hdl_close_session_handler(ngx_rtmp_session_t *s)
 {
-	ngx_rtmp_session_t		   *s;
-	ngx_rtmp_core_srv_conf_t   *cscf;
-	ngx_rtmp_hdl_ctx_t         *ctx;
+    ngx_connection_t                   *c;
+    ngx_rtmp_core_srv_conf_t           *cscf;
 
-	s = c->http_data;
-	c = s->connection;
+    c = s->connection;
 
-	cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
-	ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hdl_module);
+    cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
 
-    ngx_log_error(NGX_LOG_ERR, c->log, 0, "hdl close connection");
+    ngx_log_error(NGX_LOG_INFO, c->log, 0, "hdl close session");
 
     ngx_rtmp_fire_event(s, NGX_RTMP_DISCONNECT, NULL, NULL);
 
@@ -292,29 +269,55 @@ ngx_rtmp_http_hdl_close_connection(ngx_connection_t *c)
         ngx_del_timer(&s->ping_evt);
     }
 
+    if (s->in_old_pool) {
+        ngx_destroy_pool(s->in_old_pool);
+    }
+
+    if (s->in_pool) {
+        ngx_destroy_pool(s->in_pool);
+    }
+
+    ngx_rtmp_free_handshake_buffers(s);
+
     while (s->out_pos != s->out_last) {
         ngx_rtmp_free_shared_chain(cscf, s->out[s->out_pos++]);
         s->out_pos %= s->out_queue;
     }
 }
 
+static void
+ngx_rtmp_http_hdl_close_connection(ngx_http_request_t *r)
+{
+	ngx_rtmp_session_t		   *s;
+
+    s = r->connection->http_data;
+
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "hdl close connection");
+
+    --ngx_rtmp_hdl_naccepted;
+
+    ngx_rtmp_hdl_close_session_handler(s);
+
+    r->connection->http_data = NULL;
+}
+
 
 static ngx_int_t
 ngx_rtmp_http_hdl_connect_local(ngx_http_request_t *r, ngx_str_t *app, ngx_str_t *name, ngx_int_t protocol)
 {
-	static ngx_rtmp_connect_t   v;
+    static ngx_rtmp_connect_t   v;
 
-	ngx_rtmp_session_t         *s;
+    ngx_rtmp_session_t         *s;
     ngx_connection_t           *c;
     ngx_rtmp_hdl_ctx_t         *ctx;
 
-	s = r->connection->http_data;
+    s = r->connection->http_data;
     c = r->connection;
 
-	ngx_memzero(&v, sizeof(ngx_rtmp_connect_t));
+    ngx_memzero(&v, sizeof(ngx_rtmp_connect_t));
 
-    ngx_memcpy(v.app, app->data, app->len);
-    ngx_memcpy(v.args, r->args.data, r->args.len);
+    ngx_memcpy(v.app, app->data, ngx_min(app->len, sizeof(v.app) - 1));
+    ngx_memcpy(v.args, r->args.data, ngx_min(r->args.len, sizeof(v.args) - 1));
     ngx_memcpy(v.flashver, "HDL flashver", ngx_strlen("HDL flashver"));
     ngx_memcpy(v.swf_url, "HDL swf_url", ngx_strlen("HDL swf_url"));
     ngx_memcpy(v.tc_url, "HDL tc_url", ngx_strlen("HDL tc_url"));
@@ -330,56 +333,62 @@ ngx_rtmp_http_hdl_connect_local(ngx_http_request_t *r, ngx_str_t *app, ngx_str_t
     NGX_RTMP_SET_STRPAR(tc_url);
     NGX_RTMP_SET_STRPAR(page_url);
 
-    ngx_rtmp_parse_host(c->pool, r->headers_in.host->value, &s->host_in, &s->port_in);
+    ngx_rtmp_parse_host(s->pool, r->headers_in.host->value, &s->host_in, &s->port_in);
 
     ngx_http_arg(r, (u_char*)"vhost", 5, &s->host_in);
 
     s->name.len = name->len;
-    s->name.data = ngx_pstrdup(s->connection->pool, name);
+    s->name.data = ngx_pstrdup(s->pool, name);
 
-    s->rtmp_stream_status = NGX_RTMP_STREAM_STATUS_CONNECT;
     c->protocol = s->protocol = protocol;
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hdl_module);
     if (ctx == NULL) {
-        ctx = ngx_pcalloc(s->connection->pool, sizeof(ngx_rtmp_hdl_ctx_t));
+        ctx = ngx_pcalloc(s->pool, sizeof(ngx_rtmp_hdl_ctx_t));
         ngx_rtmp_set_ctx(s, ctx, ngx_rtmp_hdl_module);
     }
 
-	return ngx_rtmp_cmd_start_connect(s, &v);
+    return ngx_rtmp_cmd_start_connect(s, &v);
 }
 
 
 static ngx_rtmp_session_t *
-ngx_rtmp_http_hdl_init_session(ngx_connection_t *c, ngx_rtmp_addr_conf_t *addr_conf)
+ngx_rtmp_http_hdl_init_session(ngx_http_request_t *r, ngx_rtmp_addr_conf_t *addr_conf)
 {
 	ngx_rtmp_core_srv_conf_t       *cscf;
-    ngx_rtmp_core_main_conf_t      *cmcf;
     ngx_rtmp_session_t             *s;
+    ngx_connection_t               *c;
 
-    s = ngx_pcalloc(c->pool, sizeof(ngx_rtmp_session_t) +
+    c = r->connection;
+
+    s = ngx_pcalloc(r->pool, sizeof(ngx_rtmp_session_t) +
             sizeof(ngx_chain_t *) * ((ngx_rtmp_core_srv_conf_t *)
                 addr_conf->ctx->srv_conf[ngx_rtmp_core_module
                     .ctx_index])->out_queue);
     if (s == NULL) {
-		ngx_rtmp_close_connection(c);
+        ngx_http_finalize_request(r, NGX_DECLINED);
         return NULL;
     }
 
-	s->addr_conf = addr_conf;
+    s->pool = r->pool;
 
-	s->main_conf = addr_conf->ctx->main_conf;
+    s->r = r;
+    s->rc = NGX_OK;
+
+    s->addr_conf = addr_conf;
+
+    s->main_conf = addr_conf->ctx->main_conf;
     s->srv_conf = addr_conf->ctx->srv_conf;
 
-	s->addr_text = &addr_conf->addr_text;
+    s->addr_text = &addr_conf->addr_text;
 
     c->http_data = s;
-	s->connection = c;
-	c->rtmp_closer = ngx_rtmp_http_hdl_close_connection;
+    s->connection = c;
+    r->rtmp_http_close_handler = ngx_rtmp_http_hdl_close_connection;
 
-    s->ctx = ngx_pcalloc(c->pool, sizeof(void *) * ngx_rtmp_max_module);
+    s->ctx = ngx_pcalloc(s->pool, sizeof(void *) * ngx_rtmp_max_module);
     if (s->ctx == NULL) {
-        ngx_rtmp_close_connection(c);
+        ngx_rtmp_finalize_session(s);
         return NULL;
     }
 
@@ -387,10 +396,10 @@ ngx_rtmp_http_hdl_init_session(ngx_connection_t *c, ngx_rtmp_addr_conf_t *addr_c
 
     s->out_queue = cscf->out_queue;
     s->out_cork = cscf->out_cork;
-    s->in_streams = ngx_pcalloc(c->pool, sizeof(ngx_rtmp_stream_t)
+    s->in_streams = ngx_pcalloc(s->pool, sizeof(ngx_rtmp_stream_t)
             * cscf->max_streams);
     if (s->in_streams == NULL) {
-        ngx_rtmp_close_connection(c);
+        ngx_rtmp_finalize_session(s);
         return NULL;
     }
 
@@ -400,12 +409,12 @@ ngx_rtmp_http_hdl_init_session(ngx_connection_t *c, ngx_rtmp_addr_conf_t *addr_c
 	ngx_rtmp_set_chunk_size(s, NGX_RTMP_DEFAULT_CHUNK_SIZE);
 
 	if (ngx_rtmp_fire_event(s, NGX_RTMP_CONNECT, NULL, NULL) != NGX_OK) {
+
         ngx_rtmp_finalize_session(s);
         return NULL;
     }
 
     /** to init the session event'log **/
-	cmcf = ngx_rtmp_get_module_main_conf(s, ngx_rtmp_core_module );
     s->connect_time = ngx_time();  // record the start time
 	s->is_drm 		= NGX_RTMP_STREAM_NDRM;
 	s->is_public	= NGX_RTMP_STREAM_PRIVATE;
@@ -433,7 +442,7 @@ ngx_rtmp_http_hdl_init_connection(ngx_http_request_t *r, ngx_rtmp_conf_port_t *c
 
 	c = r->connection;
 
-	++ngx_rtmp_hls_naccepted;
+	++ngx_rtmp_hdl_naccepted;
 
 	port = cf_port->ports.elts;
     unix_socket = 0;
@@ -519,21 +528,18 @@ ngx_rtmp_http_hdl_init_connection(ngx_http_request_t *r, ngx_rtmp_conf_port_t *c
 
 	ngx_log_error(NGX_LOG_INFO, c->log, 0, "hdl client connected '%V'", &c->addr_text);
 
-    s = ngx_rtmp_http_hdl_init_session(c, addr_conf);
+    s = ngx_rtmp_http_hdl_init_session(r, addr_conf);
     if (s == NULL) {
         return NGX_ERROR;
     }
 
-	r->read_event_handler = ngx_http_test_reading;
-	r->keepalived_handler = ngx_rtmp_http_hdl_close_keepalived;
+    r->read_event_handler = ngx_http_test_reading;
+    // r->blocked = 1;
 
     c->write->handler = ngx_rtmp_send;
 	c->read->handler = ngx_rtmp_recv;
 
 	s->auto_pushed = unix_socket;
-
-    s = r->connection->http_data;
-	s->r = r;
 
 	return NGX_OK;
 }
@@ -544,10 +550,9 @@ ngx_rtmp_http_hdl_handler(ngx_http_request_t *r)
 {
     ngx_rtmp_http_hdl_loc_conf_t        *hlcf;
     ngx_rtmp_core_main_conf_t           *cmcf;
-	ngx_rtmp_conf_port_t                *port;
-	ngx_rtmp_session_t                  *s;
-	ngx_int_t                            protocol, rc = 0;
-	ngx_str_t                            app, name;
+    ngx_rtmp_conf_port_t                *port;
+    ngx_int_t                            protocol, rc = 0;
+    ngx_str_t                            app, name;
     ngx_int_t                            nslash;
     size_t                               i;
 
@@ -556,12 +561,17 @@ ngx_rtmp_http_hdl_handler(ngx_http_request_t *r)
         return NGX_ERROR;
     }
 
-	hlcf = ngx_http_get_module_loc_conf(r, ngx_rtmp_http_hdl_module);
-	if (hlcf == NULL || !hlcf->hdl) {
-		return NGX_DECLINED;
-	}
+    hlcf = ngx_http_get_module_loc_conf(r, ngx_rtmp_http_hdl_module);
+    if (hlcf == NULL || !hlcf->hdl) {
+    	return NGX_DECLINED;
+    }
 
-	if (!(r->method & (NGX_HTTP_GET|NGX_HTTP_HEAD))) {
+    if (r->connection->http_data) {
+
+        return NGX_CUSTOME;
+    }
+
+    if (!(r->method & (NGX_HTTP_GET|NGX_HTTP_HEAD))) {
         return NGX_HTTP_NOT_ALLOWED;
     }
 
@@ -601,8 +611,8 @@ ngx_rtmp_http_hdl_handler(ngx_http_request_t *r)
         return rc;
     }
 
-	ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
-              "http_hdl handle uri: '%V' args: '%V'", &r->uri, &r->args);
+    ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+        "http_hdl handle uri: '%V' args: '%V'", &r->uri, &r->args);
 
     if (ngx_rtmp_http_hdl_get_info(&r->uri, &app, &name) != NGX_OK) {
 
@@ -612,32 +622,16 @@ ngx_rtmp_http_hdl_handler(ngx_http_request_t *r)
     ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
               "http_hdl handle app: '%V' name: '%V'", &app, &name);
 
-	s = r->connection->http_data;
-	if (s != NULL) {
+    port = cmcf->ports.elts;
 
-		r->read_event_handler = ngx_http_test_reading;
-		r->keepalived_handler = ngx_rtmp_http_hdl_close_keepalived;
-		s->r = r;
+    if (ngx_rtmp_http_hdl_init_connection(r, &port[0]) != NGX_OK) {
 
-		ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, "http_hdl handle keep-alived request");
+        return NGX_DECLINED;
+    }
 
-        if (ngx_rtmp_http_hdl_play_local(r) != NGX_OK) {
+    ngx_rtmp_http_hdl_connect_local(r, &app, &name, protocol);
 
-            return NGX_DECLINED;
-        }
-	} else {
-
-        port = cmcf->ports.elts;
-
-        if (ngx_rtmp_http_hdl_init_connection(r, &port[0]) != NGX_OK) {
-
-            return NGX_DECLINED;
-        }
-
-        ngx_rtmp_http_hdl_connect_local(r, &app, &name, protocol);
-	}
-
-	return NGX_CUSTOME;
+    return NGX_CUSTOME;
 }
 
 
@@ -710,7 +704,7 @@ ngx_rtmp_hdl_merge_app_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_rtmp_hdl_app_conf_t    *prev = parent;
     ngx_rtmp_hdl_app_conf_t    *conf = child;
 
-    ngx_conf_merge_value(conf->hdl, prev->hdl, 0);
+    ngx_conf_merge_value(conf->hdl, prev->hdl, 1);
 
     return NGX_CONF_OK;
 }
@@ -735,13 +729,12 @@ ngx_rtmp_hdl_connect_done(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
 static ngx_chain_t *
 ngx_rtmp_hdl_append_tag_bufs(ngx_rtmp_session_t *s, ngx_chain_t *tag,
-    ngx_rtmp_header_t *ch, uint32_t epoch)
+    ngx_rtmp_header_t *ch)
 {
     ngx_chain_t                    *tail, *head, *taghead, prepkt;
     ngx_buf_t                       prebuf;
     uint32_t                        presize, presizebuf;
     u_char                         *p, *ph;
-    uint32_t                        timestamp;
     ngx_rtmp_core_srv_conf_t       *cscf;
 
     cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
@@ -752,7 +745,6 @@ ngx_rtmp_hdl_append_tag_bufs(ngx_rtmp_session_t *s, ngx_chain_t *tag,
     prepkt.buf   = &prebuf;
     prepkt.next  = NULL;
 
-    timestamp = ch->timestamp - epoch;
     head = tag;
     tail = tag;   
     taghead = NULL;
@@ -790,7 +782,7 @@ ngx_rtmp_hdl_append_tag_bufs(ngx_rtmp_session_t *s, ngx_chain_t *tag,
     *ph++ = p[1];
     *ph++ = p[0];
 
-    p = (u_char*)&timestamp;
+    p = (u_char*)&ch->timestamp;
     *ph++ = p[2];
     *ph++ = p[1];
     *ph++ = p[0];
@@ -805,19 +797,93 @@ ngx_rtmp_hdl_append_tag_bufs(ngx_rtmp_session_t *s, ngx_chain_t *tag,
 
 
 static void
+ngx_rtmp_hdl_send_combine_header(ngx_rtmp_session_t *s, ngx_rtmp_session_t *ss, ngx_rtmp_header_t lh)
+{
+    ngx_rtmp_live_chunk_stream_t   *cs;
+    ngx_rtmp_codec_ctx_t           *codec_ctx;
+    ngx_rtmp_live_ctx_t            *pullctx;
+    ngx_rtmp_core_srv_conf_t       *cscf;
+    ngx_chain_t                    *header, *pkt;
+
+    cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
+    if (cscf == NULL) {
+        return;
+    }
+
+    codec_ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_codec_module);
+    if (codec_ctx == NULL) {
+        return;
+    }
+
+    pullctx = ngx_rtmp_get_module_ctx(ss, ngx_rtmp_live_module);
+    if (pullctx == NULL) {
+        return;
+    }
+
+    // send video header at first
+    cs = &pullctx->cs[0];
+    if (!cs->active) {
+
+        header = codec_ctx->avc_header;
+        if (header) {
+
+            lh.type = NGX_RTMP_MSG_VIDEO;
+
+            pkt = ngx_rtmp_hdl_append_tag_bufs(s, header, &lh);
+
+            if (pkt && ngx_rtmp_hdl_send_message(ss, pkt, 0) == NGX_OK) {
+
+                cs->active = 1;
+            }
+
+            if (pkt) {
+                ngx_rtmp_free_shared_chain(cscf, pkt);
+                pkt = NULL;
+            }
+        }
+    }
+
+    // send audio header at last
+    cs = &pullctx->cs[1];
+    if (!cs->active) {
+
+        header = codec_ctx->aac_header;
+        if (header) {
+
+            lh.type = NGX_RTMP_MSG_AUDIO;
+
+            pkt = ngx_rtmp_hdl_append_tag_bufs(s, header, &lh);
+
+            if (pkt && ngx_rtmp_hdl_send_message(ss, pkt, 0) == NGX_OK) {
+
+                cs->timestamp = lh.timestamp;
+                cs->active = 1;
+                ss->current_time = cs->timestamp;
+            }
+
+            if (pkt) {
+                ngx_rtmp_free_shared_chain(cscf, pkt);
+                pkt = NULL;
+            }
+        }
+    }
+}
+
+
+static void
 ngx_rtmp_hdl_gop_cache_send(ngx_rtmp_session_t *ss)
 {
     ngx_rtmp_session_t             *s;
     ngx_chain_t                    *pkt, *apkt, *mpkt, *meta, *header;
-    ngx_rtmp_live_ctx_t            *pctx, *publisher, *player;
-    ngx_rtmp_hdl_ctx_t             *hctx;
+    ngx_rtmp_live_ctx_t            *pctx, *pushctx, *pullctx;
     ngx_rtmp_codec_ctx_t           *codec_ctx;
     ngx_rtmp_core_srv_conf_t       *cscf;
     ngx_rtmp_live_app_conf_t       *lacf;
     ngx_rtmp_live_gop_cache_t      *cache;
-    ngx_rtmp_header_t               ch, lh;
+    ngx_rtmp_header_t               ch, lh, mh;
     ngx_uint_t                      meta_version;
     uint32_t                        delta;
+    u_char                         *pos;
     ngx_int_t                       csidx;
     ngx_rtmp_live_chunk_stream_t   *cs;
 
@@ -826,22 +892,13 @@ ngx_rtmp_hdl_gop_cache_send(ngx_rtmp_session_t *ss)
         return;
     }
 
-    if (!ngx_rtmp_get_attr_conf(lacf, gop_cache)) {
-        return;
-    }
-
     cscf = ngx_rtmp_get_module_srv_conf(ss, ngx_rtmp_core_module);
     if (cscf == NULL) {
         return;
     }
 
-    player = ngx_rtmp_get_module_ctx(ss, ngx_rtmp_live_module);
-    if (player == NULL) {
-        return;
-    }
-
-    hctx = ngx_rtmp_get_module_ctx(ss, ngx_rtmp_hdl_module);
-    if (hctx == NULL) {
+    pullctx = ngx_rtmp_get_module_ctx(ss, ngx_rtmp_live_module);
+    if (pullctx == NULL || pullctx->stream == NULL) {
         return;
     }
 
@@ -849,7 +906,7 @@ ngx_rtmp_hdl_gop_cache_send(ngx_rtmp_session_t *ss)
         return;
     }
 
-    for (pctx = player->stream->ctx; pctx; pctx = pctx->next) {
+    for (pctx = pullctx->stream->ctx; pctx; pctx = pctx->next) {
         if (pctx->publishing) {
             break;
         }
@@ -867,10 +924,15 @@ ngx_rtmp_hdl_gop_cache_send(ngx_rtmp_session_t *ss)
     meta_version = 0;
 
     ngx_memzero(&ch, sizeof(ch));
+    ngx_memzero(&mh, sizeof(mh));
 
-    publisher = pctx;
-    s         = publisher->session;
-	ss        = player->session;
+    pushctx = pctx;
+    s       = pushctx->session;
+    ss      = pullctx->session;
+
+    if (!ngx_rtmp_get_attr_conf(lacf, gop_cache)) {
+        return;
+    }
 
     codec_ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_codec_module);
     if (codec_ctx == NULL) {
@@ -878,23 +940,26 @@ ngx_rtmp_hdl_gop_cache_send(ngx_rtmp_session_t *ss)
     }
 
     if (codec_ctx->meta) {
+        mh = codec_ctx->metah;
         meta = codec_ctx->meta;
         meta_version = codec_ctx->meta_version;
     }
 
     /* send metadata */
 
-    if (meta && meta_version != player->meta_version) {
+    if (meta && meta->buf && meta_version != pullctx->meta_version) {
         ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-                       "live: meta");
+                       "hdl: meta");
 
-        ch.type = NGX_RTMP_MSG_AMF_META;
-        ch.timestamp = 0;
+        pos = meta->buf->pos;
+        meta->buf->pos = meta->buf->start + NGX_RTMP_MAX_CHUNK_HEADER;
 
-        mpkt = ngx_rtmp_hdl_append_tag_bufs(ss, meta, &ch, 0);
+        mpkt = ngx_rtmp_hdl_append_tag_bufs(ss, meta, &mh);
+
+        meta->buf->pos = pos;
 
         if (ngx_rtmp_hdl_send_message(ss, mpkt, 0) == NGX_OK) {
-            player->meta_version = meta_version;
+            pullctx->meta_version = meta_version;
         }
 
         if (mpkt) {
@@ -902,11 +967,11 @@ ngx_rtmp_hdl_gop_cache_send(ngx_rtmp_session_t *ss)
         }
     }
 
-    for (cache = publisher->gop_cache; cache; cache = cache->next) {
+    for (cache = pushctx->gop_cache; cache; cache = cache->next) {
 
         csidx = !(lacf->interleave || cache->h.type == NGX_RTMP_MSG_VIDEO);
 
-        cs = &player->cs[csidx];
+        cs = &pullctx->cs[csidx];
 
         lh = ch = cache->h;
 
@@ -915,35 +980,29 @@ ngx_rtmp_hdl_gop_cache_send(ngx_rtmp_session_t *ss)
             lh.timestamp = cs->timestamp;
         }
 
-        if (!hctx->initialized) {
-
-            hctx->initialized = 1;
-            hctx->epoch = ch.timestamp;
-        }
-
         delta = ch.timestamp - lh.timestamp;
+
+        ngx_rtmp_hdl_send_combine_header(s, ss, lh);
 
         if (!cs->active) {
 
             header = cache->h.type == NGX_RTMP_MSG_VIDEO ? codec_ctx->avc_header : codec_ctx->aac_header;
             if (header) {
 
-                apkt = ngx_rtmp_hdl_append_tag_bufs(s, header, &ch, hctx->epoch);
+                apkt = ngx_rtmp_hdl_append_tag_bufs(s, header, &lh);
             }
 
-            if (ngx_rtmp_hdl_send_message(ss, apkt, cache->prio) != NGX_OK) {
+            if (apkt && ngx_rtmp_hdl_send_message(ss, apkt, 0) == NGX_OK) {
 
-                return;
+                cs->timestamp = lh.timestamp;
+                cs->active = 1;
+                ss->current_time = cs->timestamp;
             }
-
-            cs->timestamp = lh.timestamp;
-            cs->active = 1;
-            ss->current_time = cs->timestamp;
         }
 
-        pkt = ngx_rtmp_hdl_append_tag_bufs(s, cache->frame, &ch, hctx->epoch);
+        pkt = ngx_rtmp_hdl_append_tag_bufs(s, cache->frame, &ch);
 
-        if (ngx_rtmp_hdl_send_message(ss, pkt, 0) != NGX_OK) {
+        if (ngx_rtmp_hdl_send_message(ss, pkt, cache->prio) != NGX_OK) {
             ++pctx->ndropped;
 
             cs->dropped += delta;
@@ -961,9 +1020,10 @@ ngx_rtmp_hdl_gop_cache_send(ngx_rtmp_session_t *ss)
             apkt = NULL;
         }
 
-        ngx_log_debug2(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-               "gop_send: send tag type='%s' ltimestamp='%uD'",
+        ngx_log_debug3(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
+               "hdl_gop_send: send tag type='%s' prio='%d' ltimestamp='%uD'",
                cache->h.type == NGX_RTMP_MSG_AUDIO ? "audio" : "video",
+               cache->prio,
                lh.timestamp);
 
         cs->timestamp += delta;
@@ -979,18 +1039,19 @@ ngx_rtmp_hdl_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     ngx_rtmp_live_app_conf_t       *lacf;
     ngx_rtmp_hdl_app_conf_t        *hacf;
     ngx_rtmp_core_srv_conf_t       *cscf;
-    ngx_rtmp_hdl_ctx_t             *hctx;
     ngx_rtmp_live_ctx_t            *ctx, *pctx;
     ngx_rtmp_codec_ctx_t           *codec_ctx = NULL;
-    ngx_rtmp_header_t               ch, lh, hch;
+    ngx_rtmp_header_t               ch, lh, mh;
     ngx_rtmp_session_t             *ss;
-    ngx_int_t                       rc;
+    ngx_int_t                       mandatory;
+    u_char                         *pos;
     ngx_uint_t                      csidx;
     ngx_uint_t                      prio;
     ngx_uint_t                      meta_version;
     ngx_chain_t                    *header, *fpkt, *apkt, *mpkt, *meta;
     ngx_rtmp_live_chunk_stream_t   *cs;
     uint32_t                        delta = 0;
+    ngx_rtmp_chunk_info_t          *ci;
 #ifdef NGX_DEBUG
     const char                     *type_s;
 
@@ -1036,6 +1097,7 @@ ngx_rtmp_hdl_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     header = NULL;
     meta = NULL;
     meta_version = 0;
+    mandatory = 0;
 
     prio = (h->type == NGX_RTMP_MSG_VIDEO ?
             ngx_rtmp_get_video_frame_type(in) : 0);
@@ -1047,7 +1109,7 @@ ngx_rtmp_hdl_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     cs = &ctx->cs[csidx];
 
     ngx_memzero(&ch, sizeof(ch));
-    ngx_memzero(&hch, sizeof(hch));
+    ngx_memzero(&mh, sizeof(mh));
 
     ch.timestamp = h->timestamp;
     ch.msid = NGX_RTMP_MSID;
@@ -1073,6 +1135,7 @@ ngx_rtmp_hdl_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                 ngx_rtmp_is_codec_header(in)) // is or not audio header
             {
                 prio = 0;
+                mandatory = 1;
             }
 
         } else {
@@ -1082,16 +1145,27 @@ ngx_rtmp_hdl_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                 ngx_rtmp_is_codec_header(in)) // is or not video header
             {
                 prio = 0;
+                mandatory = 1;
             }
         }
 
         if (codec_ctx->meta) {
+            mh = codec_ctx->metah;
             meta = codec_ctx->meta;
             meta_version = codec_ctx->meta_version;
         }
     }
 
     /* broadcast to all subscribers */
+    fpkt = ngx_rtmp_hdl_append_tag_bufs(s, in, &ch);
+
+    if (!ngx_rtmp_is_codec_header(in)) {
+        ci = ngx_rtmp_get_chunk_info(fpkt);
+        ci->type = h->type;
+        ci->recv_time = ngx_rtmp_get_utc_time();
+        ci->is_raw = 1;
+        ci->timestamp = h->timestamp;
+    }
 
     for (pctx = ctx->stream->ctx; pctx; pctx = pctx->next) {
         if (pctx == ctx || pctx->paused) {
@@ -1101,19 +1175,8 @@ ngx_rtmp_hdl_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         ss = pctx->session;
         cs = &pctx->cs[csidx];
 
-        hctx = ngx_rtmp_get_module_ctx(ss, ngx_rtmp_hdl_module);
-        if (hctx == NULL) {
-            continue;
-        }
-
         if (!ngx_hdl_pull_type(ss->protocol)) {
             continue;
-        }
-
-        if (!hctx->initialized) {
-
-            hctx->initialized = 1;
-            hctx->epoch = ch.timestamp;
         }
 
         /* send metadata */
@@ -1122,10 +1185,12 @@ ngx_rtmp_hdl_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
             ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
                            "live_hdl: meta");
 
-            hch.type = NGX_RTMP_MSG_AMF_META;
-            hch.timestamp = 0;
+            pos = meta->buf->pos;
+            meta->buf->pos = meta->buf->start + NGX_RTMP_MAX_CHUNK_HEADER;
 
-            mpkt = ngx_rtmp_hdl_append_tag_bufs(ss, meta, &hch, 0);
+            mpkt = ngx_rtmp_hdl_append_tag_bufs(ss, meta, &mh);
+
+            meta->buf->pos = pos;
 
             if (ngx_rtmp_hdl_send_message(ss, mpkt, 0) == NGX_OK) {
                 pctx->meta_version = meta_version;
@@ -1146,9 +1211,18 @@ ngx_rtmp_hdl_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
             cs->dropped = 0;
         }
 
+        /* send combine header */
+        ngx_rtmp_hdl_send_combine_header(s, ss, lh);
+
         /* absolute packet */
 
         if (!cs->active) {
+
+            if (mandatory) {
+                ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
+                               "live_hdl: skipping header");
+                continue;
+            }
 
             if (lacf->wait_video && h->type == NGX_RTMP_MSG_AUDIO &&
 				!pctx->cs[0].active)
@@ -1174,30 +1248,28 @@ ngx_rtmp_hdl_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                                "live_hdl: abs %s header timestamp=%uD",
                                type_s, lh.timestamp);
 
-                if (header) {
-                    if (apkt == NULL) {
-                        apkt = ngx_rtmp_hdl_append_tag_bufs(s, header, &ch, hctx->epoch);
-                    }
+                apkt = ngx_rtmp_hdl_append_tag_bufs(s, header, &lh);
 
-                    rc = ngx_rtmp_hdl_send_message(ss, apkt, 0);
-                    if (rc != NGX_OK) {
-                        continue;
-                    }
+                if (ngx_rtmp_hdl_send_message(ss, apkt, 0) != NGX_OK) {
+                    continue;
                 }
 
                 cs->timestamp = lh.timestamp;
                 cs->active = 1;
                 ss->current_time = cs->timestamp;
+
+                if (apkt) {
+                    ngx_rtmp_free_shared_chain(cscf, apkt);
+                    apkt = NULL;
+                }
             }
         }
 
-        fpkt = ngx_rtmp_hdl_append_tag_bufs(s, in, &ch, hctx->epoch);
-
         /* send relative packet */
 
-        ngx_log_debug2(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-                       "live_hdl: rel %s packet delta=%uD",
-                       type_s, delta);
+        ngx_log_debug3(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
+                       "live_hdl: rel %s prio '%d' packet delta=%uD",
+                       type_s, prio, delta);
 
         if (ngx_rtmp_hdl_send_message(ss, fpkt, prio) != NGX_OK) {
             ++pctx->ndropped;
@@ -1210,15 +1282,12 @@ ngx_rtmp_hdl_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         cs->timestamp += delta;
         ss->current_time = cs->timestamp;
 
-        if (apkt) {
-            ngx_rtmp_free_shared_chain(cscf, apkt);
-            apkt = NULL;
-        }
+        ngx_rtmp_update_bandwidth(&pctx->bw_out, h->mlen);
+    }
 
-        if (fpkt) {
-            ngx_rtmp_free_shared_chain(cscf, fpkt);
-            fpkt = NULL;
-        }
+    if (fpkt) {
+        ngx_rtmp_free_shared_chain(cscf, fpkt);
+        fpkt = NULL;
     }
 
     return NGX_OK;
@@ -1233,6 +1302,7 @@ ngx_rtmp_hdl_play_done(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         "HTTP/1.1 200 OK\r\n"
         "Cache-Control: no-cache\r\n"
         "Content-Type: video/x-flv\r\n"
+        "Connection: close\r\n"
         "Expires: -1\r\n"
         "Pragma: no-cache\r\n"
         "\r\n"
@@ -1254,6 +1324,7 @@ ngx_rtmp_hdl_play_done(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         0x00  /* PreviousTagSize0 (not actually a header) */
     };
 
+    ngx_rtmp_hdl_ctx_t             *hctx;
     ngx_rtmp_core_srv_conf_t       *cscf;
     ngx_rtmp_hdl_app_conf_t        *lacf;
     ngx_chain_t                     c1, c2, *pkt;
@@ -1271,6 +1342,15 @@ ngx_rtmp_hdl_play_done(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     }
 
     if (!ngx_hdl_pull_type(s->protocol)) {
+        return NGX_OK;
+    }
+
+    hctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hdl_module);
+    if (hctx == NULL) {
+        return NGX_OK;
+    }
+
+    if (hctx->initialized) {
         return NGX_OK;
     }
 
@@ -1292,6 +1372,13 @@ ngx_rtmp_hdl_play_done(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     ngx_rtmp_free_shared_chain(cscf, pkt);
 
     ngx_rtmp_hdl_gop_cache_send(s);
+
+    if (!hctx->initialized) { 
+        hctx->initialized = 1;
+        
+        s->status_code = 200;
+        ngx_rtmp_log_evt_hdl_out(s);
+    }
 
     return NGX_OK;
 }

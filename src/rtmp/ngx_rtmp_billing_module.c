@@ -95,6 +95,8 @@ ngx_rtmp_billing_create_main_conf(ngx_conf_t *cf)
     bmcf->event_file.fd = NGX_INVALID_FILE;
     bmcf->flow_file.log = &cf->cycle->new_log;
     bmcf->flow_file.fd = NGX_INVALID_FILE;
+    bmcf->delay_file.fd = NGX_INVALID_FILE;
+    bmcf->delay_file.log = &cf->cycle->new_log;
     bmcf->billing_path.len = 0;
 
     return bmcf;
@@ -132,13 +134,13 @@ ngx_rtmp_billing_ensure_directory(ngx_rtmp_billing_main_conf_t *bmcf)
                 return NGX_ERROR; \
             } \
             if (ngx_create_full_path(filename, NGX_RTMP_BILLING_DIR_ACCESS) == NGX_FILE_ERROR) { \
-                ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, ngx_errno, \
+                ngx_log_debug1(NGX_LOG_DEBUG_RTMP, bmcf->log, ngx_errno, \
                               "billing: " ngx_create_dir_n " failed on '%s'", \
                               filename); \
                 return NGX_ERROR; \
             } \
             ngx_log_debug1(NGX_LOG_DEBUG_RTMP, bmcf->log, 0, \
-                           "billing: directory '%V' created", &bmcf->dir); \
+                           "billing: directory '%V' created", &bmcf->billing_path); \
         } else { \
             if (!ngx_is_dir(&fi)) { \
                 ngx_log_debug1(NGX_LOG_DEBUG_RTMP, bmcf->log, 0, \
@@ -161,6 +163,9 @@ ngx_rtmp_billing_ensure_directory(ngx_rtmp_billing_main_conf_t *bmcf)
     NGX_RTMP_BILLING_ENSURE_DIR();
 
     *ngx_cpymem(filename + bmcf->billing_path.len, "event/", ngx_strlen("event/")) = 0;
+    NGX_RTMP_BILLING_ENSURE_DIR();
+
+    *ngx_cpymem(filename + bmcf->billing_path.len, "delay/", ngx_strlen("delay/")) = 0;
     NGX_RTMP_BILLING_ENSURE_DIR();
 
 #undef NGX_RTMP_BILLING_ENSURE_DIR
@@ -197,6 +202,8 @@ ngx_rtmp_billing_file_move(ngx_rtmp_billing_main_conf_t *bmcf, ngx_rtmp_core_mai
         if (ngx_rtmp_billing_rename_file(bmcf->event_name_src.data, bmcf->event_name_dst.data)
             == NGX_FILE_ERROR)
         {
+
+            bmcf->event_file.offset = 0;
             ngx_log_error(NGX_LOG_ERR, bmcf->log, ngx_errno,
                           "billing: rename failed: '%V'->'%V'",
                           &bmcf->event_name_src, &bmcf->event_name_dst);
@@ -215,6 +222,7 @@ ngx_rtmp_billing_file_move(ngx_rtmp_billing_main_conf_t *bmcf, ngx_rtmp_core_mai
         if (ngx_rtmp_billing_rename_file(bmcf->flow_name_src.data, bmcf->flow_name_dst.data)
             == NGX_FILE_ERROR)
         {
+            bmcf->flow_file.offset = 0;
             ngx_log_error(NGX_LOG_ERR, bmcf->log, ngx_errno,
                           "billing: rename failed: '%V'->'%V'",
                           &bmcf->flow_name_src, &bmcf->flow_name_dst);
@@ -223,6 +231,25 @@ ngx_rtmp_billing_file_move(ngx_rtmp_billing_main_conf_t *bmcf, ngx_rtmp_core_mai
             ngx_log_debug2(NGX_LOG_ERR, bmcf->log, 0,
                           "billing: rename ok: '%V'->'%V'",
                           &bmcf->flow_name_src, &bmcf->flow_name_dst);
+        }
+    }
+
+    if (bmcf->delay_file.fd != NGX_INVALID_FILE) {
+        ngx_close_file(bmcf->delay_file.fd);
+        bmcf->delay_file.fd = NGX_INVALID_FILE;
+
+        if (ngx_rtmp_billing_rename_file(bmcf->delay_name_src.data, bmcf->delay_name_des.data)
+            == NGX_FILE_ERROR)
+        {
+            ngx_log_error(NGX_LOG_ERR, bmcf->log, ngx_errno,
+                          "billing: rename failed: '%V'->'%V'",
+                          &bmcf->delay_name_src, &bmcf->delay_name_des);
+        } else {
+
+            bmcf->delay_file.offset = 0;
+            ngx_log_debug2(NGX_LOG_ERR, bmcf->log, 0,
+                          "billing: rename ok: '%V'->'%V'",
+                          &bmcf->delay_name_src, &bmcf->delay_name_des);
         }
     }
 
@@ -314,6 +341,7 @@ ngx_rtmp_billing_flow_open(ngx_rtmp_billing_main_conf_t *bmcf, ngx_rtmp_core_mai
 
         bmcf->flow_file.fd = ngx_open_file(bmcf->flow_name_src.data,
                 NGX_FILE_WRONLY, NGX_FILE_TRUNCATE, NGX_FILE_DEFAULT_ACCESS);
+        bmcf->flow_file.offset = 0;
         if(bmcf->flow_file.fd == NGX_INVALID_FILE) {
 
     		ngx_log_error(NGX_LOG_ERR, bmcf->log, ngx_errno, ngx_open_file_n " '%V' failed",
@@ -369,7 +397,10 @@ ngx_rtmp_billing_live(ngx_rtmp_billing_main_conf_t *bmcf, ngx_rtmp_live_app_conf
       
          for (; stream; stream = stream->next) {
 
-         	ctx = stream->ctx;
+             ctx = stream->ctx;
+             if (!ctx) {
+                 continue;
+             }
             spub = ctx->session;
             for (nplayer = 0; ctx; ctx = ctx->next) {
 
@@ -388,11 +419,11 @@ ngx_rtmp_billing_live(ngx_rtmp_billing_main_conf_t *bmcf, ngx_rtmp_live_app_conf
                 continue;
             }
 
-			now = ngx_time();
+            now = ngx_time();
             ngx_localtime(now, &tm);
-			delay = ngx_min(now - spub->connect_time, (time_t) bmcf->billing_interval);
+            delay = ngx_min(now - spub->connect_time, (time_t) bmcf->billing_interval);
 
-			p = ngx_sprintf(buffer, "%04d-%02d-%02d-%02d%02d %V rtmp://%V:%d/%V/%V %V %d %d %l %l %d %d\r\n",
+            p = ngx_sprintf(buffer, "%04d-%02d-%02d-%02d%02d %V rtmp://%V:%d/%V/%V %V %d %d %l %l %d %d\r\n",
 							tm.ngx_tm_year, tm.ngx_tm_mon, tm.ngx_tm_mday, tm.ngx_tm_hour, tm.ngx_tm_min,
 							&spub->host_in, 
 							&spub->host_in, spub->port_in, &spub->app, &spub->name, 
@@ -421,7 +452,7 @@ ngx_rtmp_billing_live(ngx_rtmp_billing_main_conf_t *bmcf, ngx_rtmp_live_app_conf
             ngx_log_debug1(NGX_LOG_INFO, bmcf->log, 0, "billing flow write '%s'", buffer);
 
 	        ngx_write_file(&bmcf->flow_file, buffer, p - buffer, bmcf->flow_file.offset);
-	}
+	    }
 	}
 
 	return;
@@ -432,10 +463,10 @@ ngx_int_t
 ngx_rtmp_billing_event_write(ngx_rtmp_session_t *s, char *event, char *pResult, ngx_int_t status)
 {
     static const char *g_relay_str[] = {
-		"None_relay",
-		"Cluster_relay",
-		"Remote_relay",
-		"Local_relay"
+        "None_relay",
+        "Cluster_relay",
+        "Remote_relay",
+        "Local_relay"
     };
 
     static const char *g_public_str[] = {
@@ -444,8 +475,8 @@ ngx_rtmp_billing_event_write(ngx_rtmp_session_t *s, char *event, char *pResult, 
     };
 
     static const char *g_drm_str[] = {
-    	"NDRM",
-    	"Drm"
+        "NDRM",
+        "Drm"
     };
 
     ngx_rtmp_billing_main_conf_t    *bmcf;
@@ -478,14 +509,14 @@ ngx_rtmp_billing_event_write(ngx_rtmp_session_t *s, char *event, char *pResult, 
     	return NGX_ERROR;
     }
 
-	p_relay = g_relay_str[s->relay_type];
-	p_public = g_public_str[s->is_public];
-	p_drm = g_drm_str[s->is_drm];
+    p_relay = g_relay_str[s->relay_type];
+    p_public = g_public_str[s->is_public];
+    p_drm = g_drm_str[s->is_drm];
 
     now = ngx_time();
     ngx_localtime(now, &tm);
 
-	p = ngx_sprintf(log_buf, "%04d-%02d-%02d-%02d%02d %p %V %V%s%V %s %d:%d %V %s %d %s %s %s %s %d\r\n",
+    p = ngx_sprintf(log_buf, "%04d-%02d-%02d-%02d%02d %p %V %V%s%V %s %d:%d %V %s %d %s %s %s %s %d\r\n",
             tm.ngx_tm_year, tm.ngx_tm_mon, tm.ngx_tm_mday, tm.ngx_tm_hour, tm.ngx_tm_min,
             s, &s->host_in, &s->tc_url, 
             s->name.len == 0 ? "" : "/", &s->name, event,
@@ -493,12 +524,12 @@ ngx_rtmp_billing_event_write(ngx_rtmp_session_t *s, char *event, char *pResult, 
             &s->connection->addr_text, "-",
             now, p_public, p_drm, p_relay, pResult, status);
 
-	if(!p) {
+    if(!p) {
 
-		return NGX_ERROR;
-	}
+    	return NGX_ERROR;
+    }
 
-	*p = 0;
+    *p = 0;
 
     if (bmcf->event_file.fd == NGX_INVALID_FILE) {
 
@@ -510,7 +541,7 @@ ngx_rtmp_billing_event_write(ngx_rtmp_session_t *s, char *event, char *pResult, 
 
     ngx_log_debug1(NGX_LOG_INFO, bmcf->log, 0, "billing event write '%s'", log_buf);
 
-	ngx_write_file(&bmcf->event_file, log_buf, p - log_buf, bmcf->event_file.offset);
+    ngx_write_file(&bmcf->event_file, log_buf, p - log_buf, bmcf->event_file.offset);
 
     return NGX_OK;	
 }
@@ -521,7 +552,7 @@ ngx_rtmp_billing_application(ngx_rtmp_billing_main_conf_t *bmcf, ngx_rtmp_core_a
 {
     ngx_rtmp_billing_live(bmcf, cacf->app_conf[ngx_rtmp_live_module.ctx_index], NULL);
 
-	return;
+    return;
 }
 
 
@@ -543,7 +574,7 @@ ngx_rtmp_billing_server(ngx_rtmp_billing_main_conf_t *bmcf, ngx_rtmp_core_srv_co
 
     cacfp = cscf->applications.elts;
     for (n = 0; n < cscf->applications.nelts; ++n, ++cacfp) {
-    
+
         ngx_rtmp_billing_application(bmcf, *cacfp);
     }
 
@@ -578,8 +609,8 @@ ngx_rtmp_billing_flow_write(ngx_event_t *ev)
     ngx_rtmp_core_main_conf_t       *cmcf;
     ngx_rtmp_core_srv_conf_t       **pcscf;
     ngx_uint_t                       n;
-    ngx_rtmp_live_dyn_srv_t   **srv;
-    ngx_int_t                         i;
+    ngx_rtmp_live_dyn_srv_t        **srv;
+    ngx_int_t                        i;
 
     bmcf = ev->data;
     cmcf = ngx_rtmp_core_main_conf;
@@ -594,19 +625,18 @@ ngx_rtmp_billing_flow_write(ngx_event_t *ev)
     } else {
 
         if (ngx_rtmp_live_main_conf) {
-			
+
             for(i =0; i< NGX_RTMP_MAX_SRV_NBUCKET; i++){
-				
+
                 srv = &ngx_rtmp_live_main_conf->srvs[i];
                 for (; *srv; srv = &(*srv)->next) {
-    
+
                     if (*srv) {
                         ngx_rtmp_billing_server_r(bmcf, *srv);
                     }
                 }
-    	     }
+    	    }
         }
-        // TO DO..
     }
 
     ngx_add_timer(&bmcf->billing_evt, bmcf->billing_interval);
@@ -733,10 +763,21 @@ ngx_rtmp_billing_postconfiguration(ngx_conf_t *cf)
     p = ngx_cpymem(bmcf->flow_name_src.data, bmcf->billing_path.data, bmcf->billing_path.len);
     p = ngx_cpymem(p, "tmp/", ngx_strlen("tmp/"));
 
+    bmcf->delay_name_des.len = bmcf->billing_path.len + 6 + 1 + NGX_RTMP_BILLING_NAME_MAX_SIZE; // length 6 means "event/"
+    bmcf->delay_name_des.data = ngx_palloc(cf->pool, bmcf->delay_name_des.len);
+    p = ngx_cpymem(bmcf->delay_name_des.data, bmcf->billing_path.data, bmcf->billing_path.len);
+    p = ngx_cpymem(p, "delay/", ngx_strlen("delay/"));
+
+    bmcf->delay_name_src.len = bmcf->billing_path.len + 4 + 1 + NGX_RTMP_BILLING_NAME_MAX_SIZE;
+    bmcf->delay_name_src.data = ngx_palloc(cf->pool, bmcf->delay_name_src.len);
+    p = ngx_cpymem(bmcf->delay_name_src.data, bmcf->billing_path.data, bmcf->billing_path.len);
+    p = ngx_cpymem(p, "tmp/", ngx_strlen("tmp/"));
+
+
     next_publish = ngx_rtmp_publish;
     ngx_rtmp_publish = ngx_rtmp_billing_publish;
 
-	next_play = ngx_rtmp_play;
+    next_play = ngx_rtmp_play;
     ngx_rtmp_play = ngx_rtmp_billing_play;
 
     return NGX_OK;

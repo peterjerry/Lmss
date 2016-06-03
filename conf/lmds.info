@@ -1,4 +1,6 @@
 upstream lmds {
     #round-robin by default
     server 10.4.23.115;
+
+    keepalive 60;
 }

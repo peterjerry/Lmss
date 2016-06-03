@@ -43,8 +43,11 @@ typedef struct {
     ngx_str_t                   event_name_dst;
     ngx_str_t                   flow_name_src;
     ngx_str_t                   flow_name_dst;
+    ngx_str_t                   delay_name_src;
+    ngx_str_t                   delay_name_des;
     ngx_file_t                  event_file;
     ngx_file_t                  flow_file;
+    ngx_file_t                  delay_file;
     ngx_log_t                  *log;
 } ngx_rtmp_billing_main_conf_t;
 

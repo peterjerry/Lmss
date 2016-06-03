@@ -380,7 +380,7 @@ ngx_rtmp_auto_push_reconnect(ngx_event_t *ev)
 
         u->data = path;
         u->len = p - path;
-        if (ngx_parse_url(s->connection->pool, &at.url) != NGX_OK) {
+        if (ngx_parse_url(s->pool, &at.url) != NGX_OK) {
             ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
                           "auto_push: auto-push parse_url failed "
                           "url='%V' name='%s'",
@@ -463,7 +463,7 @@ ngx_rtmp_auto_push_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_auto_push_module);
     if (ctx == NULL) {
-        ctx = ngx_palloc(s->connection->pool,
+        ctx = ngx_palloc(s->pool,
                          sizeof(ngx_rtmp_auto_push_ctx_t));
         if (ctx == NULL) {
             goto next;

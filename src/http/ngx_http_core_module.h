@@ -72,7 +72,6 @@ typedef struct {
     unsigned                   default_server:1;
     unsigned                   bind:1;
     unsigned                   wildcard:1;
-    unsigned                   per_worker:1;
 #if (NGX_HTTP_SSL)
     unsigned                   ssl:1;
 #endif

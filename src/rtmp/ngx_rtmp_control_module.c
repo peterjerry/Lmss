@@ -198,7 +198,7 @@ ngx_rtmp_control_redirect_handler(ngx_http_request_t *r, ngx_rtmp_session_t *s)
 
         ngx_memzero(&vpublish, sizeof(ngx_rtmp_publish_t));
 
-        ngx_memcpy(vpublish.name, name.data, name.len);
+        ngx_memcpy(vpublish.name, name.data, ngx_min(name.len, sizeof(vpublish.name) - 1));
 
         ngx_rtmp_cmd_fill_args(vpublish.name, vpublish.args);
 
@@ -211,7 +211,7 @@ ngx_rtmp_control_redirect_handler(ngx_http_request_t *r, ngx_rtmp_session_t *s)
 
         ngx_memzero(&vplay, sizeof(ngx_rtmp_play_t));
 
-        ngx_memcpy(vplay.name, name.data, name.len);
+        ngx_memcpy(vplay.name, name.data, ngx_min(name.len, sizeof(vplay.name) - 1));
 
         ngx_rtmp_cmd_fill_args(vplay.name, vplay.args);
 

@@ -38,14 +38,7 @@ typedef struct {
 } ngx_rtmp_hls_variant_t;
 
 
-typedef struct {
-    ngx_chain_t                        *out;
-    ngx_msec_t                          timeout;
-} ngx_rtmp_hls_session_t;
-
-
 struct ngx_rtmp_hls_ctx_s {
-    ngx_rtmp_hls_session_t             *hls_session;
     ngx_file_t                          file, vodfile, indexfile, m3u8file, m3u8filebak;
     ngx_file_t                          expire_file;
     u_char                              time[128];
@@ -62,6 +55,7 @@ struct ngx_rtmp_hls_ctx_s {
     ngx_str_t                           vodstream;
     uint64_t                            frag;
     uint64_t                            frag_ts;
+    uint64_t                            frag_ts_system;
     uint64_t                            frag_seq;
     ngx_uint_t                          nfrags;
     ngx_uint_t                          winfrags;
@@ -74,8 +68,8 @@ struct ngx_rtmp_hls_ctx_s {
     ngx_buf_t                          *aframe;
     uint64_t                            aframe_pts;
     ngx_rtmp_hls_variant_t             *var;
+    ngx_event_handler_pt                write_handler_backup;
     uint32_t                            base_timestamp;
-
     unsigned                            m3u8_header:1;
     unsigned                            publisher:1;
     unsigned                            opened:1;
@@ -86,7 +80,6 @@ struct ngx_rtmp_hls_ctx_s {
 
 typedef struct {
     ngx_flag_t                          hls;
-    ngx_flag_t                          hls_keyframe;
     ngx_msec_t                          hls_fragment;
     ngx_msec_t                          hls_playlist_length;
     ngx_flag_t                          hls_vod;
@@ -109,10 +102,24 @@ typedef struct {
     ngx_array_t                        *variant;
     ngx_str_t                           base_url;
 
-    ngx_int_t                           usr_id;
+    ngx_int_t                           user_id;
     ngx_int_t                           hls_vod_is_public;
+
     ngx_str_t                           hls_vod_bucket;
     ngx_str_t                           hls_vod_url;
+    
+    ngx_flag_t                          mp4_vod;
+    ngx_int_t                           mp4_vod_is_public;
+    ngx_str_t                           mp4_vod_bucket;
+    ngx_str_t                           mp4_vod_url;
+
+    ngx_str_t                          region_mp4;
+    ngx_str_t                          region_hls;
+    
+    ngx_str_t                          host_mp4;
+    ngx_str_t                          host_hls;
+    
+    ngx_flag_t                         hls_vod_auto_merge;
 
     ngx_int_t                           granularity;
 } ngx_rtmp_hls_app_conf_t;

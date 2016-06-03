@@ -22,29 +22,6 @@ static void ngx_rtmp_netcall_recv(ngx_event_t *rev);
 static void ngx_rtmp_netcall_send(ngx_event_t *wev);
 
 
-typedef struct ngx_rtmp_netcall_session_s {
-    ngx_rtmp_session_t                         *session;
-    ngx_peer_connection_t                      *pc;
-    ngx_url_t                                  *url;
-    struct ngx_rtmp_netcall_session_s          *next;
-    void                                       *arg;
-    ngx_rtmp_netcall_handle_pt                  handle;
-    ngx_rtmp_netcall_filter_pt                  filter;
-    ngx_rtmp_netcall_sink_pt                    sink;
-    ngx_chain_t                                *in;
-    ngx_chain_t                                *inlast;
-    ngx_chain_t                                *out;
-    ngx_msec_t                                  timeout;
-    unsigned                                    detached:1;
-    size_t                                      bufsize;
-} ngx_rtmp_netcall_session_t;
-
-
-typedef struct {
-    ngx_rtmp_netcall_session_t     *cs;
-} ngx_rtmp_netcall_ctx_t;
-
-
 static ngx_command_t  ngx_rtmp_netcall_commands[] = {
 
     { ngx_string("netcall_timeout"),
@@ -118,7 +95,7 @@ ngx_rtmp_netcall_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_rtmp_netcall_srv_conf_t *prev = parent;
     ngx_rtmp_netcall_srv_conf_t *conf = child;
 
-    ngx_conf_merge_msec_value(conf->timeout, prev->timeout, 10000);
+    ngx_conf_merge_msec_value(conf->timeout, prev->timeout, 3000);
     ngx_conf_merge_size_value(conf->bufsize, prev->bufsize, 1024);
 
     return NGX_CONF_OK;
@@ -133,11 +110,17 @@ ngx_rtmp_netcall_disconnect(ngx_rtmp_session_t *s)
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
 
-	ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "netcall disconnect: vhost='%V' app='%V' name='%V'",
-			&s->host_in ,&s->app, &s->name);
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0, "netcall disconnect: vhost='%V' app='%V' name='%V'",
+        &s->host_in ,&s->app, &s->name);
 
     if (ctx) {
         for (cs = ctx->cs; cs; cs = cs->next) {
+            ctx->start = cs->epoch;
+            ctx->end = ngx_current_msec;
+            ctx->name = cs->name;
+            ctx->ret = 1;
+            ngx_rtmp_fire_event(s, NGX_RTMP_NOTIFY_LATENCY, NULL, NULL);
+
             ngx_rtmp_netcall_detach(cs->pc->connection);
         }
     }
@@ -150,6 +133,11 @@ static ngx_int_t
 ngx_rtmp_netcall_get_peer(ngx_peer_connection_t *pc, void *data)
 {
     ngx_rtmp_netcall_session_t   *cs = data;
+
+    if (cs->url == NULL) {
+
+        return NGX_ERROR;
+    }
 
     pc->sockaddr =(struct sockaddr *)&cs->url->sockaddr;
     pc->socklen = cs->url->socklen;
@@ -193,6 +181,8 @@ ngx_rtmp_netcall_create(ngx_rtmp_session_t *s, ngx_rtmp_netcall_init_t *ci)
         if (ctx == NULL) {
             return NGX_ERROR;
         }
+
+        ngx_memzero(ctx, sizeof(*ctx));
         ngx_rtmp_set_ctx(s, ctx, ngx_rtmp_netcall_module);
     }
 
@@ -224,6 +214,7 @@ ngx_rtmp_netcall_create(ngx_rtmp_session_t *s, ngx_rtmp_netcall_init_t *ci)
         ngx_memcpy(cs->arg, ci->arg, ci->argsize);
     }
 
+    cs->name = ci->name;
     cs->timeout = nscf->timeout;
     cs->bufsize = nscf->bufsize;
     cs->url = ci->url;
@@ -243,20 +234,21 @@ ngx_rtmp_netcall_create(ngx_rtmp_session_t *s, ngx_rtmp_netcall_init_t *ci)
     /* connect */
     rc = ngx_event_connect_peer(pc);
     if (rc != NGX_OK && rc != NGX_AGAIN ) {
-        ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
                 "netcall connection failed: url='%V' name='%V'",
                 &ci->url->url, &s->name);
         goto error;
     }
 
-	ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
-				"netcall connection success: url='%V' app='%V' name='%V'",
-				&ci->url->url, &s->app, &s->name);
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+    			"netcall connection success: url='%V' app='%V' name='%V'",
+    			&ci->url->url, &s->app, &s->name);
 
     cc = pc->connection;
     cc->data = cs;
     cc->pool = pool;
     cs->pc = pc;
+    cs->epoch = ngx_current_msec;
 
     cs->out = ci->create(s, ci->arg, pool);
     if (cs->out == NULL) {
@@ -295,6 +287,7 @@ ngx_rtmp_netcall_close(ngx_connection_t *cc)
     ngx_rtmp_session_t                 *s;
     ngx_rtmp_netcall_ctx_t             *ctx;
     ngx_buf_t                          *b;
+    ngx_int_t                           rc;
 
     cs = cc->data;
 
@@ -313,7 +306,6 @@ ngx_rtmp_netcall_close(ngx_connection_t *cc)
 
             b = cs->in->buf;
             b->pos = b->last = b->start;
-
         }
 
         for(css = &ctx->cs; *css; css = &((*css)->next)) {
@@ -323,8 +315,19 @@ ngx_rtmp_netcall_close(ngx_connection_t *cc)
             }
         }
 
-		if (cs->handle && cs->handle(s, cs->arg, cs->in) != NGX_OK) {
-            ngx_rtmp_finalize_session(s);
+        if (cs->handle) {
+            rc = cs->handle(s, cs->arg, cs->in);
+
+            ctx->start = cs->epoch;
+            ctx->end = ngx_current_msec;
+            ctx->name = cs->name;
+            ctx->ret = (rc == NGX_OK);
+            ngx_rtmp_fire_event(s, NGX_RTMP_NOTIFY_LATENCY, NULL, NULL);
+
+            if (rc != NGX_OK) {
+
+                ngx_rtmp_finalize_session(s);
+            }
         }
     }
 
@@ -455,7 +458,7 @@ ngx_rtmp_netcall_send(ngx_event_t *wev)
     }
 
     if (wev->timedout) {
-        ngx_log_error(NGX_LOG_INFO, cc->log, NGX_ETIMEDOUT,
+        ngx_log_error(NGX_LOG_ERR, cc->log, NGX_ETIMEDOUT,
                 "netcall: client send timed out");
         cc->timedout = 1;
         ngx_rtmp_netcall_close(cc);
@@ -572,12 +575,12 @@ ngx_rtmp_netcall_http_format_request(ngx_int_t method, ngx_str_t *host,
 ngx_chain_t *
 ngx_rtmp_netcall_http_format_session(ngx_rtmp_session_t *s, ngx_pool_t *pool)
 {
-	ngx_rtmp_core_main_conf_t      *cmcf;
+    ngx_rtmp_core_main_conf_t      *cmcf;
     ngx_chain_t                    *cl;
     ngx_buf_t                      *b;
     ngx_str_t                      *addr_text;
 
-	cmcf = ngx_rtmp_get_module_main_conf(s, ngx_rtmp_core_module);
+    cmcf = ngx_rtmp_get_module_main_conf(s, ngx_rtmp_core_module);
 
     addr_text = &s->connection->addr_text;
 

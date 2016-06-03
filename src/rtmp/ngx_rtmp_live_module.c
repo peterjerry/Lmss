@@ -11,6 +11,7 @@
 #include "ngx_rtmp_codec_module.h"
 #include "ngx_rtmp_notify_module.h"
 #include "ngx_rtmp_bitop.h"
+#include "ngx_rtmp_log_module.h"
 
 #define NGX_RTMP_LIVE_GOP_SIZE          100 /* gop cache */
 
@@ -35,10 +36,11 @@ static char *ngx_rtmp_live_set_msec_slot(ngx_conf_t *cf, ngx_command_t *cmd,
        void *conf);
 static void ngx_rtmp_live_start(ngx_rtmp_session_t *s);
 static void ngx_rtmp_live_stop(ngx_rtmp_session_t *s);
+static void ngx_rtmp_live_gop_cache_clean(ngx_rtmp_session_t *s);
 static ngx_int_t ngx_rtmp_live_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v);
-extern ngx_int_t ngx_rtmp_relay_relaying(ngx_rtmp_session_t *s, ngx_str_t *name);
-extern ngx_int_t ngx_rtmp_relay_player_dry(ngx_rtmp_session_t *s, ngx_str_t *name);
-extern ngx_int_t ngx_rtmp_relay_player_new(ngx_rtmp_session_t *s, ngx_str_t *name);
+static ngx_int_t ngx_rtmp_live_create_flux_timer(ngx_rtmp_live_stream_t *stream);
+static ngx_int_t ngx_rtmp_live_create_check_timer(ngx_rtmp_live_stream_t *stream);
+static void ngx_rtmp_live_destory_check_timer(ngx_rtmp_live_stream_t *stream);
 
 
 static ngx_command_t  ngx_rtmp_live_commands[] = {
@@ -431,8 +433,10 @@ ngx_rtmp_live_get_stream_dynamic(ngx_rtmp_session_t *s, int create, ngx_rtmp_liv
 {
     ngx_rtmp_live_app_conf_t   *lacf;
     ngx_rtmp_live_main_conf_t  *lmcf;
+    ngx_rtmp_core_srv_conf_t   *cscf;
     ngx_rtmp_live_stream_t    **stream;
     ngx_rtmp_live_ctx_t        *ctx;
+    ngx_str_t                   unique_name;
 
     lacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_live_module);
     if (lacf == NULL) {
@@ -444,12 +448,16 @@ ngx_rtmp_live_get_stream_dynamic(ngx_rtmp_session_t *s, int create, ngx_rtmp_liv
         return NULL;
     }
 
+    cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
+
+    unique_name = ngx_rtmp_get_attr_conf(cscf, unique_name);
+
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
     if (ctx == NULL) {
         return NULL;
     }
 
-    *srv = ngx_rtmp_live_get_srv_dynamic(lmcf, &s->dynamic_cf->unique_name, create);
+    *srv = ngx_rtmp_live_get_srv_dynamic(lmcf, &unique_name, create);
     if (*srv == NULL) {
         return NULL;
     }
@@ -466,71 +474,216 @@ ngx_rtmp_live_get_stream_dynamic(ngx_rtmp_session_t *s, int create, ngx_rtmp_liv
 
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
             "live: dynamic create unique_name='%V' app='%V' stream='%V'",
-            &s->dynamic_cf->unique_name, &s->app, &s->name);
+            &unique_name, &s->app, &s->name);
 
     return stream;
 }
 
 
 static void
-ngx_rtmp_live_checking_callback(ngx_event_t *e)
+ngx_rtmp_live_flux_timer(ngx_event_t *e)
 {
-	static ngx_rtmp_play_t      v;
-
     ngx_rtmp_session_t         *s;
     ngx_rtmp_live_stream_t     *stream;
-    ngx_rtmp_session_t         *player;
+    ngx_rtmp_log_main_conf_t   *lmcf;
 
     stream = e->data;
-    if (NULL == stream->ctx || NULL == stream->ctx->session)
-        return;
-    if (stream->publishing)
-        return;
+    if (stream == NULL || stream->ctx == NULL) {
+        goto error;
+    }
 
     s = stream->ctx->session;
 
-	*ngx_cpymem(v.name, s->name.data, s->name.len) = 0;
-	*ngx_cpymem(v.args, s->args.data, s->args.len) = 0;
-	v.start = s->start;
-	v.duration = s->duration;
-	v.reset = s->reset;
-	v.silent = s->silent;
+    if (s == NULL) {
+        goto error;
+    }
 
-    ngx_rtmp_notify_play1(s, &v);
+    lmcf = ngx_rtmp_get_module_main_conf(s, ngx_rtmp_log_module);
 
-    player = stream->ctx->session;
-    e = &stream->check_evt;
+    // trigger writing a line to flux logger.
+    ngx_rtmp_log_flux(s);
+
+    e = &stream->flux_evt;
     e->data = stream;
-    e->log = player->connection->log;
-    e->handler = ngx_rtmp_live_checking_callback;
+    e->log = s->connection->log;
+    e->handler = ngx_rtmp_live_flux_timer;
 
-    ngx_add_timer(&stream->check_evt, stream->check_evt_msec);
+    ngx_add_timer(&stream->flux_evt, lmcf->flux_interval);
+
+    return;
+
+error:
+    if (stream->flux_evt.timer_set) {
+        ngx_del_timer(&stream->flux_evt);
+    }
+
+    return;
 }
 
 
 static ngx_int_t
-ngx_rtmp_live_checking_publish(ngx_rtmp_session_t *s, ngx_rtmp_live_stream_t *stream)
+ngx_rtmp_live_create_flux_timer(ngx_rtmp_live_stream_t *stream)
 {
-    ngx_rtmp_session_t             *player;
-    ngx_event_t                    *e;
+    ngx_rtmp_session_t         *s;
+    ngx_event_t                *e;
+    ngx_rtmp_log_main_conf_t   *lmcf;
 
-    if (stream->check_evt.timer_set) {
-		ngx_log_debug(NGX_LOG_WARN, s->connection->log, 0,
-                   "ngx_rtmp_live_publish_checking: check_evt has been set already.",
-                   stream->check_evt_msec);
+    if (stream == NULL || stream->ctx == NULL) {
+        goto error;
+    }
+
+    if (stream->flux_evt.timer_set) {
         return NGX_OK;
     }
 
-    player = stream->ctx->session;
+    s = stream->ctx->session;
+
+    if (s == NULL) {
+        goto error;
+    }
+
+    lmcf = ngx_rtmp_get_module_main_conf(s, ngx_rtmp_log_module);
+
+    e = &stream->flux_evt;
+    e->data = stream;
+    e->log = s->connection->log;
+    e->handler = ngx_rtmp_live_flux_timer;
+
+    ngx_add_timer(&stream->flux_evt, lmcf->flux_interval);
+
+    return NGX_OK;
+
+error:
+    if (stream->flux_evt.timer_set) {
+        ngx_del_timer(&stream->flux_evt);
+    }
+
+    return NGX_OK;
+}
+
+
+static void
+ngx_rtmp_live_destory_flux_timer(ngx_rtmp_session_t *s)
+{
+	ngx_rtmp_live_stream_t *stream;
+	ngx_rtmp_live_ctx_t    *ctx;
+
+	if (!s) {
+		return;
+	}
+
+	ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
+	if (!ctx) {
+		return;
+	}
+
+	stream = ctx->stream;
+	if (!stream) {
+		return;
+	}
+
+	ngx_rtmp_log_flux(s);
+
+    if (stream->flux_evt.timer_set) {
+    	ngx_del_timer(&stream->flux_evt);
+    }
+
+    return;
+}
+
+
+static void
+ngx_rtmp_live_check_timer(ngx_event_t *e)
+{
+    static ngx_rtmp_play_t      v;
+
+    ngx_rtmp_session_t         *s;
+    ngx_rtmp_live_stream_t     *stream;
+
+    stream = e->data;
+    if (stream == NULL || stream->ctx == NULL || stream->publishing) {
+        goto error;
+    }
+
+    s = stream->ctx->session;
+
+    if (s == NULL) {
+        goto error;
+    }
+
+    ngx_memzero(&v, sizeof(v));
+    *ngx_cpymem(v.name, s->name.data, ngx_min(s->name.len, NGX_RTMP_MAX_NAME - 1)) = 0;
+    *ngx_cpymem(v.args, s->args.data, ngx_min(s->args.len, NGX_RTMP_MAX_ARGS - 1)) = 0;
+    v.start = s->start;
+    v.duration = s->duration;
+    v.reset = s->reset;
+    v.silent = s->silent;
+
+    ngx_rtmp_notify_play1(s, &v);
 
     e = &stream->check_evt;
     e->data = stream;
-    e->log = player->connection->log;
-    e->handler = ngx_rtmp_live_checking_callback;
+    e->log = s->connection->log;
+    e->handler = ngx_rtmp_live_check_timer;
+
+    ngx_add_timer(&stream->check_evt, stream->check_evt_msec);
+
+    return;
+
+error:
+    ngx_rtmp_live_destory_check_timer(stream);
+
+    return;
+}
+
+
+static ngx_int_t
+ngx_rtmp_live_create_check_timer(ngx_rtmp_live_stream_t *stream)
+{
+    ngx_rtmp_session_t             *s;
+    ngx_event_t                    *e;
+
+    if (stream == NULL || stream->ctx == NULL) {
+        goto error;
+    }
+
+    if (stream->check_evt.timer_set) {
+        return NGX_OK;
+    }
+
+    s = stream->ctx->session;
+
+    if (s == NULL) {
+        goto error;
+    }
+
+    e = &stream->check_evt;
+    e->data = stream;
+    e->log = s->connection->log;
+    e->handler = ngx_rtmp_live_check_timer;
 
     ngx_add_timer(&stream->check_evt, stream->check_evt_msec);
 
     return NGX_OK;
+
+error:
+    ngx_rtmp_live_destory_check_timer(stream);
+
+    return NGX_OK;
+}
+
+
+static void
+ngx_rtmp_live_destory_check_timer(ngx_rtmp_live_stream_t *stream)
+{
+    if (stream == NULL) {
+        return;
+    }
+
+    if (stream->check_evt.timer_set) {
+
+        ngx_del_timer(&stream->check_evt);
+    }
 }
 
 
@@ -543,7 +696,7 @@ ngx_rtmp_live_idle(ngx_event_t *pev)
     c = pev->data;
     s = !ngx_rtmp_type(c->protocol) ? c->http_data : c->data;
 
-    ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                   "live: drop idle publisher");
 
     ngx_rtmp_finalize_session(s);
@@ -580,7 +733,7 @@ ngx_rtmp_live_set_status(ngx_rtmp_session_t *s, ngx_chain_t *control,
 
         /* publisher */
 
-        if (ngx_rtmp_get_attr_conf(lacf, idle_timeout) && s->relay_type == NGX_NONE_RELAY) {
+        if (ngx_rtmp_get_attr_conf(lacf, idle_timeout)) {
             e = &ctx->idle_evt;
 
             if (active && !ctx->idle_evt.timer_set) {
@@ -803,7 +956,7 @@ next:
 }
 
 
-static void
+void
 ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
 {
     ngx_rtmp_live_ctx_t            *ctx;
@@ -826,7 +979,7 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
     }
 
     if (ctx == NULL) {
-        ctx = ngx_palloc(s->connection->pool, sizeof(ngx_rtmp_live_ctx_t));
+        ctx = ngx_palloc(s->pool, sizeof(ngx_rtmp_live_ctx_t));
         ngx_rtmp_set_ctx(s, ctx, ngx_rtmp_live_module);
     }
 
@@ -837,7 +990,7 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
     app = NULL;
     stream = NULL;
 
-    create = publisher || lacf->idle_streams || s->relay_type != NGX_NONE_RELAY;
+    create = publisher || (lacf->idle_streams && s->relay_type == NGX_NONE_RELAY);
 
     ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
                    "live: join '%s'", name);
@@ -849,7 +1002,7 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
     }
 
     if (stream == NULL ||
-        !(publisher || (*stream)->publishing || lacf->idle_streams || s->relay_type != NGX_NONE_RELAY ))
+        !(publisher || (*stream)->publishing || lacf->idle_streams))
     {
         ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
                       "live: stream not found");
@@ -864,7 +1017,7 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
 
     if (publisher) {
         if ((*stream)->publishing) {
-            ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
+            ngx_log_error(NGX_LOG_WARN, s->connection->log, 0,
                           "live: '%V/%s', already publishing", &s->app, name);
 
             ngx_rtmp_send_status(s, "NetStream.Publish.BadName", "error",
@@ -875,13 +1028,10 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
 
         (*stream)->publishing = 1;
 
-         //del checking timer
-         ngx_del_timer(&(*stream)->check_evt);
-    } else {
-    	ngx_str_t strname;
-		strname.data = name;
-		strname.len  = ngx_strlen(name);
-    	ngx_rtmp_relay_player_new(s, &strname);
+        if ((*stream)->check_evt.timer_set) {
+
+            ngx_del_timer(&(*stream)->check_evt);
+        }
     }
 
     if (ngx_rtmp_remote_conf()) {
@@ -895,6 +1045,11 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
     ctx->protocol = s->protocol;
 
 	(*stream)->ctx = ctx;
+
+	// first connection trigger stream timer
+	if (!ctx->next) {
+        ngx_rtmp_live_create_flux_timer(*stream);
+	}
 
     if (lacf->buflen) {
         s->out_buffer = 1;
@@ -910,9 +1065,9 @@ ngx_rtmp_live_join(ngx_rtmp_session_t *s, u_char *name, unsigned publisher)
 	if (!publisher && !(*stream)->publishing) {
 		ngx_str_t strname;
 		strname.data = name;
-		strname.len  = ngx_strlen(name);
-		if (ngx_rtmp_relay_relaying(s, &strname) == NGX_ERROR) {
-			ngx_rtmp_live_checking_publish(s, *stream);
+		strname.len = ngx_strlen(name);
+        if (ngx_rtmp_relay_get_publish(s, &strname) == NULL) {
+			ngx_rtmp_live_create_check_timer(*stream);
 		}
 	}
 }
@@ -949,6 +1104,8 @@ ngx_rtmp_live_empty_leave_dynamic(ngx_rtmp_session_t *s, ngx_rtmp_live_stream_t 
     ngx_rtmp_live_ctx_t            *ctx;
     ngx_rtmp_live_app_conf_t       *lacf;
     ngx_rtmp_live_main_conf_t      *lmcf;
+    ngx_rtmp_core_srv_conf_t       *cscf;
+    ngx_str_t                       unique_name;
 
     lacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_live_module);
     if (lacf == NULL) {
@@ -960,6 +1117,10 @@ ngx_rtmp_live_empty_leave_dynamic(ngx_rtmp_session_t *s, ngx_rtmp_live_stream_t 
         return;
     }
 
+    cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
+
+    unique_name = ngx_rtmp_get_attr_conf(cscf, unique_name);
+
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
     if (ctx == NULL) {
         return;
@@ -967,14 +1128,14 @@ ngx_rtmp_live_empty_leave_dynamic(ngx_rtmp_session_t *s, ngx_rtmp_live_stream_t 
 
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
             "live_empty_leave: dynamic unique_name='%V' app='%V' stream='%V'",
-            &s->dynamic_cf->unique_name, &s->app, &s->name);
+            &unique_name, &s->app, &s->name);
 
     *stream = (*stream)->next;
     (*app)->nstream --;
 
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
             "live_empty_leave: dynamic unique_name='%V' app='%V' stream='%V' nstream='%d'",
-            &s->dynamic_cf->unique_name, &s->app, &s->name, (*app)->nstream);
+            &unique_name, &s->app, &s->name, (*app)->nstream);
 
     ctx->stream->next = lmcf->free_streams;
     lmcf->free_streams = ctx->stream;
@@ -986,7 +1147,7 @@ ngx_rtmp_live_empty_leave_dynamic(ngx_rtmp_session_t *s, ngx_rtmp_live_stream_t 
 
         ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                 "live_empty_leave: dynamic unique_name='%V' app='%V' stream='%V' napp='%d'",
-                &s->dynamic_cf->unique_name, &s->app, &s->name, (*srv)->napp);
+                &unique_name, &s->app, &s->name, (*srv)->napp);
 
         ctx->app->next = lmcf->free_apps;
         lmcf->free_apps = ctx->app;
@@ -1049,11 +1210,13 @@ ngx_rtmp_live_close(ngx_rtmp_session_t *s)
     }
 
     if (ctx->publishing) {
+
         ngx_rtmp_send_status(s, "NetStream.Unpublish.Success",
                              "status", "Stop publishing");
 		ctx->stream->bw_in.bandwidth = 0;
 		ctx->stream->bw_real.bandwidth = 0;
 		ctx->stream->bw_out.bandwidth = 0;
+		ctx->stream->bw_real.intl_end_timestamp = 0;
         if (ngx_rtmp_publishing > 0) {
 
             --ngx_rtmp_publishing;
@@ -1069,52 +1232,55 @@ ngx_rtmp_live_close(ngx_rtmp_session_t *s)
                 }
             }
         } else {
-        	ngx_uint_t nplayer = 0;
+            ngx_uint_t nplayer = 0;
             for (pctx = ctx->stream->ctx; pctx; pctx = pctx->next) {
-				if (pctx->publishing == 0) {
+                if (pctx->publishing == 0) {
                     ss = pctx->session;
-	                if (ss->relay_type != NGX_NONE_RELAY) {
-	                    ngx_log_error(NGX_LOG_INFO, ss->connection->log, 0,
-	                                   "live: close relay session");
-	                    ngx_rtmp_finalize_session(ss);
-	                }
-					nplayer++;
-				}
+                    if (ss->relay_type != NGX_NONE_RELAY) {
+                        ngx_log_error(NGX_LOG_INFO, ss->connection->log, 0,
+                            "live: close relay session");
+                        ngx_rtmp_finalize_session(ss);
+                    }
+                    nplayer++;
+                }
             }
 
-			if (nplayer > 0) {
-				ngx_rtmp_live_checking_publish(s, ctx->stream);
-			}
+            if (nplayer > 0) {
+                ngx_rtmp_live_create_check_timer(ctx->stream);
+            }
         }
+
+        ngx_rtmp_live_gop_cache_clean(s);
+        
     } else {
 
-		if (ctx->stream->ctx != NULL &&
-			ctx->stream->ctx->next == NULL &&
-			ctx->stream->ctx->publishing) {
-			ngx_str_t strname;
-			strname.data = ctx->stream->name;
-			strname.len  = ngx_strlen(ctx->stream->name);
-			ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
-					"live: last player close his connection.");
-			ngx_rtmp_relay_player_dry(s, &strname);
-		}
+        if (ngx_rtmp_playing > 0) {
 
-	    if (ngx_rtmp_playing > 0) {
+            --ngx_rtmp_playing;
+        }
 
-			--ngx_rtmp_playing;
-	    }
+        if (ctx->stream->ctx != NULL &&
+            ctx->stream->ctx->next == NULL && ctx->stream->ctx->publishing) {
+
+            if (ctx->stream->ctx->session->relay_type != NGX_NONE_RELAY) {
+
+                ngx_rtmp_finalize_session(ctx->stream->ctx->session);
+            }
+        }
     }
 
     if (ctx->stream->ctx) {
         ctx->stream = NULL;
         return;
+    } else {
+        /** del flux timer and trigger write log when last connection disconnect **/
+    	ngx_rtmp_live_destory_flux_timer(s);
+    	ngx_rtmp_live_destory_check_timer(ctx->stream);
     }
 
     ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
                    "live: delete empty stream '%s'",
                    ctx->stream->name);
-
-	ngx_del_timer(&(ctx->stream->check_evt));
 
     if (ngx_rtmp_remote_conf()) {
         stream = ngx_rtmp_live_get_stream_dynamic(s, 0, &srv, &app);
@@ -1133,6 +1299,7 @@ ngx_rtmp_live_close(ngx_rtmp_session_t *s)
     }
 
     if (!ctx->silent && !ctx->publishing && !lacf->play_restart) {
+        
         ngx_rtmp_send_status(s, "NetStream.Play.Stop", "status", "Stop live");
     }
 }
@@ -1174,6 +1341,7 @@ ngx_rtmp_live_pause(ngx_rtmp_session_t *s, ngx_rtmp_pause_t *v)
                    (ngx_int_t) v->pause, v->position);
 
     if (v->pause) {
+
         if (ngx_rtmp_send_status(s, "NetStream.Pause.Notify", "status",
                                  "Paused live")
             != NGX_OK)
@@ -1186,6 +1354,7 @@ ngx_rtmp_live_pause(ngx_rtmp_session_t *s, ngx_rtmp_pause_t *v)
         ngx_rtmp_live_stop(s);
 
     } else {
+    
         if (ngx_rtmp_send_status(s, "NetStream.Unpause.Notify", "status",
                                  "Unpaused live")
             != NGX_OK)
@@ -1228,6 +1397,89 @@ static void ngx_rtmp_update_total_real_bandwidth(ngx_rtmp_bandwidth_t *bw, ngx_r
 }
 
 
+static void
+ngx_rtmp_live_send_combine_header(ngx_rtmp_session_t *s, ngx_rtmp_session_t *ss, ngx_rtmp_header_t lh)
+{
+    ngx_rtmp_live_chunk_stream_t   *cs;
+    ngx_rtmp_codec_ctx_t           *codec_ctx;
+    ngx_rtmp_live_ctx_t            *pullctx;
+    ngx_rtmp_core_srv_conf_t       *cscf;
+    ngx_rtmp_header_t               th;
+    ngx_chain_t                    *header, *pkt;
+
+    cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
+    if (cscf == NULL) {
+        return;
+    }
+
+    codec_ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_codec_module);
+    if (codec_ctx == NULL) {
+        return;
+    }
+
+    pullctx = ngx_rtmp_get_module_ctx(ss, ngx_rtmp_live_module);
+    if (pullctx == NULL) {
+        return;
+    }
+
+    // send video header at first
+    cs = &pullctx->cs[0];
+    if (!cs->active) {
+
+        header = codec_ctx->avc_header;
+        if (header) {
+
+            th = lh;
+            th.csid = NGX_RTMP_CSID_VIDEO;
+            th.type = NGX_RTMP_MSG_VIDEO;
+
+            pkt = ngx_rtmp_append_shared_bufs(cscf, NULL, header);
+            ngx_rtmp_prepare_message(s, &th, NULL, pkt);
+
+            if (pkt && ngx_rtmp_send_message(ss, pkt, 0) == NGX_OK) {
+
+                cs->timestamp = th.timestamp;
+                cs->active = 1;
+                ss->current_time = cs->timestamp;
+            }
+
+            if (pkt) {
+                ngx_rtmp_free_shared_chain(cscf, pkt);
+                pkt = NULL;
+            }
+        }
+    }
+
+    // send audio header at last
+    cs = &pullctx->cs[1];
+    if (!cs->active) {
+
+        header = codec_ctx->aac_header;
+        if (header) {
+
+            th = lh;
+            th.csid = NGX_RTMP_CSID_AUDIO;
+            th.type = NGX_RTMP_MSG_AUDIO;
+
+            pkt = ngx_rtmp_append_shared_bufs(cscf, NULL, header);
+            ngx_rtmp_prepare_message(s, &th, NULL, pkt);
+
+            if (pkt && ngx_rtmp_send_message(ss, pkt, 0) == NGX_OK) {
+
+                cs->timestamp = th.timestamp;
+                cs->active = 1;
+                ss->current_time = cs->timestamp;
+            }
+
+            if (pkt) {
+                ngx_rtmp_free_shared_chain(cscf, pkt);
+                pkt = NULL;
+            }
+        }
+    }
+}
+
+
 static ngx_rtmp_live_gop_cache_t *
 ngx_rtmp_live_gop_cache_alloc(ngx_rtmp_session_t *s)
 {
@@ -1256,7 +1508,6 @@ static void
 ngx_rtmp_live_gop_cache_link(ngx_rtmp_session_t *s, ngx_rtmp_live_gop_cache_t *new)
 {
     ngx_rtmp_live_ctx_t            *ctx;
-    ngx_rtmp_live_gop_cache_t      *cache;
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
     if (ctx == NULL) {
@@ -1265,12 +1516,11 @@ ngx_rtmp_live_gop_cache_link(ngx_rtmp_session_t *s, ngx_rtmp_live_gop_cache_t *n
 
     if (ctx->gop_cache == NULL) {
 
-        ctx->gop_cache = new;
+        ctx->gop_cache_tail = ctx->gop_cache = new;
     } else {
 
-        for (cache = ctx->gop_cache; cache->next; cache = cache->next);
-
-        cache->next = new;
+        ctx->gop_cache_tail->next = new;
+        ctx->gop_cache_tail = new;
     }
 }
 
@@ -1301,11 +1551,10 @@ ngx_rtmp_live_gop_cache_clean(ngx_rtmp_session_t *s)
 
     if (ctx->gop_pool) {
         ngx_destroy_pool(ctx->gop_pool);
+        ctx->gop_pool = NULL;
     }
 
-    ctx->gop_pool = ngx_create_pool(4096, s->connection->log);
-
-    ctx->gop_cache = NULL;
+    ctx->gop_cache_tail = ctx->gop_cache = NULL;
 }
 
 
@@ -1416,17 +1665,13 @@ ngx_rtmp_live_gop_cache_send(ngx_rtmp_session_t *ss)
         return;
     }
 
-    if (!ngx_rtmp_get_attr_conf(lacf, gop_cache)) {
-        return;
-    }
-
     cscf = ngx_rtmp_get_module_srv_conf(ss, ngx_rtmp_core_module);
     if (cscf == NULL) {
         return;
     }
 
     player = ngx_rtmp_get_module_ctx(ss, ngx_rtmp_live_module);
-    if (player == NULL) {
+    if (player == NULL || player->stream == NULL) {
         return;
     }
 
@@ -1452,7 +1697,11 @@ ngx_rtmp_live_gop_cache_send(ngx_rtmp_session_t *ss)
 
     publisher = pctx;
     s         = publisher->session;
-	ss        = player->session;
+    ss        = player->session;
+
+    if (!ngx_rtmp_get_attr_conf(lacf, gop_cache)) {
+        return;
+    }
 
     codec_ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_codec_module);
     if (codec_ctx == NULL) {
@@ -1469,6 +1718,11 @@ ngx_rtmp_live_gop_cache_send(ngx_rtmp_session_t *ss)
     if (meta && meta_version != player->meta_version) {
         ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
                        "live: meta");
+
+        ss->log_bpos = ss->log_buf;
+        *ngx_sprintf(ss->log_bpos, " rtmp_msg_type:%d amf_msg_name:%s",
+                NGX_RTMP_MSG_AMF_META, "onMetaData") = 0;
+        ngx_rtmp_log_evt_out(ss);
 
         if (ngx_rtmp_send_message(ss, meta, 0) == NGX_OK) {
             player->meta_version = meta_version;
@@ -1490,6 +1744,8 @@ ngx_rtmp_live_gop_cache_send(ngx_rtmp_session_t *ss)
 
         delta = ch.timestamp - lh.timestamp;
 
+        ngx_rtmp_live_send_combine_header(s, ss, lh);
+
         if (!cs->active) {
 
             header = cache->h.type == NGX_RTMP_MSG_VIDEO ? codec_ctx->avc_header : codec_ctx->aac_header;
@@ -1499,21 +1755,24 @@ ngx_rtmp_live_gop_cache_send(ngx_rtmp_session_t *ss)
                 ngx_rtmp_prepare_message(s, &lh, NULL, apkt);
             }
 
-            if (ngx_rtmp_send_message(ss, apkt, cache->prio) != NGX_OK) {
+            if (apkt && ngx_rtmp_send_message(ss, apkt, 0) == NGX_OK) {
 
-                return;
+                cs->timestamp = lh.timestamp;
+                cs->active = 1;
+                ss->current_time = cs->timestamp;
             }
 
-            cs->timestamp = lh.timestamp;
-            cs->active = 1;
-            ss->current_time = cs->timestamp;
+            if (apkt) {
+                ngx_rtmp_free_shared_chain(cscf, apkt);
+                apkt = NULL;
+            }
         }
 
         pkt = ngx_rtmp_append_shared_bufs(cscf, NULL, cache->frame);
 
         ngx_rtmp_prepare_message(s, &ch, &lh, pkt);
 
-        if (ngx_rtmp_send_message(ss, pkt, 0) != NGX_OK) {
+        if (ngx_rtmp_send_message(ss, pkt, cache->prio) != NGX_OK) {
             ++pctx->ndropped;
 
             cs->dropped += delta;
@@ -1526,21 +1785,16 @@ ngx_rtmp_live_gop_cache_send(ngx_rtmp_session_t *ss)
             pkt = NULL;
         }
 
-        if (apkt) {
-            ngx_rtmp_free_shared_chain(cscf, apkt);
-            apkt = NULL;
-        }
-
-        ngx_log_debug2(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-               "gop_send: send tag type='%s' ltimestamp='%uD'",
+        ngx_log_debug3(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
+               "live_gop_send: send tag type='%s' prio='%d' ltimestamp='%uD'",
                cache->h.type == NGX_RTMP_MSG_AUDIO ? "audio" : "video",
+               cache->prio,
                lh.timestamp);
 
         cs->timestamp += delta;
         ss->current_time = cs->timestamp;
     }
 }
-
 
 static ngx_int_t
 ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
@@ -1701,6 +1955,10 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
     ngx_rtmp_prepare_message(s, &ch, &lh, rpkt);
 
+    if (!ngx_rtmp_is_codec_header(in)) {
+        ngx_rtmp_update_recv_delay(s, h, rpkt);
+    }
+
     ngx_rtmp_live_gop_cache(s, prio, &ch, in);
 
     for (pctx = ctx->stream->ctx; pctx; pctx = pctx->next) {
@@ -1721,6 +1979,11 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
             ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
                            "live: meta");
 
+            ss->log_bpos = ss->log_buf;
+            *ngx_sprintf(ss->log_bpos, " rtmp_msg_type:%d amf_msg_name:%s",
+                    NGX_RTMP_MSG_AMF_META, "onMetaData") = 0;
+            ngx_rtmp_log_evt_out(ss);
+
             if (ngx_rtmp_send_message(ss, meta, 0) == NGX_OK) {
                 pctx->meta_version = meta_version;
             }
@@ -1736,13 +1999,16 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
             cs->dropped = 0;
         }
 
+        /* send combine header */
+        ngx_rtmp_live_send_combine_header(s, ss, lh);
+
+
         /* absolute packet */
 
         if (!cs->active) {
 
             if (mandatory) {
-                ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-                               "live: skipping header");
+                ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0, "live: skipping header");
                 continue;
             }
 
@@ -1846,9 +2112,35 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
         /* send relative packet */
 
-        ngx_log_debug2(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
-                       "live: rel %s packet delta=%uD",
-                       type_s, delta);
+        ngx_log_debug3(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
+                       "live: rel %s prio %d packet delta=%uD",
+                       type_s, prio, delta);
+
+        /* write event log */
+        switch(h->type) {
+            case NGX_RTMP_MSG_AUDIO:
+            {
+                if (!ss->audio_recved) {
+
+                    ss->audio_recved = 1;
+                    ss->log_bpos = ss->log_buf;
+                    *ngx_sprintf(ss->log_bpos, " rtmp_msg_type:%ui", h->type) = 0;
+                    ngx_rtmp_log_evt_out(ss);
+                }
+                break;
+            }
+            case NGX_RTMP_MSG_VIDEO:
+            {
+                if (!ss->video_recved) {
+
+                    ss->video_recved = 1;
+                    ss->log_bpos = ss->log_buf;
+                    *ngx_sprintf(ss->log_bpos, " rtmp_msg_type:%ui", h->type) = 0;
+                    ngx_rtmp_log_evt_out(ss);
+                }
+                break;
+            }
+        }
 
         if (ngx_rtmp_send_message(ss, rpkt, prio) != NGX_OK) {
             ++pctx->ndropped;
@@ -1867,6 +2159,8 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         cs->timestamp += delta;
         ++peers;
         ss->current_time = cs->timestamp;
+
+        ngx_rtmp_update_bandwidth(&pctx->bw_out, h->mlen);
     }
 
     if (rpkt) {
@@ -1886,21 +2180,17 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     }
 
     ngx_rtmp_update_bandwidth(&ctx->stream->bw_in, h->mlen);
-    ngx_rtmp_update_bandwidth_real(&ctx->stream->bw_real, h->mlen, h->timestamp / 1000);
-    ngx_rtmp_update_total_real_bandwidth(&ngx_rtmp_bw_real, lacf);
-
-	if (ctx && ctx->stream) {
-
-		if (s->relay_type == NGX_NONE_RELAY) {
-
-			ngx_rtmp_update_bandwidth(&ctx->stream->bw_billing_in, h->mlen);
-		}
-	}
-
     ngx_rtmp_update_bandwidth(h->type == NGX_RTMP_MSG_AUDIO ?
                               &ctx->stream->bw_in_audio :
                               &ctx->stream->bw_in_video,
                               h->mlen);
+    ngx_rtmp_update_bandwidth_real(&ctx->stream->bw_real, h->mlen, h->timestamp / 1000);
+    ngx_rtmp_update_total_real_bandwidth(&ngx_rtmp_bw_real, lacf);
+
+    if (s->relay_type == NGX_NONE_RELAY) {
+
+    	ngx_rtmp_update_bandwidth(&ctx->stream->bw_billing_in, h->mlen);
+    }
 
     return NGX_OK;
 }
@@ -1909,23 +2199,7 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 static ngx_int_t
 ngx_rtmp_live_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t *v)
 {	
-    if (s->auto_pushed || s->relay) {
-		
-        goto next;
-    }
-
-    if (ngx_rtmp_remote_conf()) {
-		
-        if (s->dynamic_cf && !(s->dynamic_cf->live)) {
-			
-            ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "live is off......");
-            return NGX_ERROR;
-        }
-    }
-	
-next:
     return next_connect(s, v);
-    
 }
 
 
@@ -1963,9 +2237,11 @@ ngx_rtmp_live_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
     ctx->silent = v->silent;
 
     if (!ctx->silent) {
+        
         ngx_rtmp_send_status(s, "NetStream.Publish.Start",
                              "status", "Start publishing");
     }
+
 
 next:
     return next_publish(s, v);
@@ -2006,11 +2282,17 @@ ngx_rtmp_live_play(ngx_rtmp_session_t *s, ngx_rtmp_play_t *v)
                    &s->page_url, s->addr_text, &s->tc_url, &s->flashver);
 
     ctx->silent = v->silent;
+    ctx->bw_out.bandwidth = 0;
 
     if (!ctx->silent && !lacf->play_restart) {
-    	ngx_rtmp_send_status(s, "NetStream.Play.Start",
-                             "status", "Start live");
-        ngx_rtmp_send_sample_access(s);
+
+        if (!ctx->sended) {
+
+            ctx->sended = 1;
+            ngx_rtmp_send_status(s, "NetStream.Play.Start",
+                                 "status", "Start live");
+            ngx_rtmp_send_sample_access(s);
+        }
 
 		s->start = v->start;
 		s->duration = v->duration;

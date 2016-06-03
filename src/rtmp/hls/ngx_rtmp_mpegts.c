@@ -242,11 +242,12 @@ ngx_rtmp_mpegts_write_frame_buffer(ngx_file_t *file, ngx_rtmp_mpegts_frame_t *f,
         }
 
         if (*out_size + sizeof(packet) > NGX_RTMP_HLS_BUFSIZE){
-			ngx_log_error(NGX_LOG_INFO, file->log, 0,
+			ngx_log_error(NGX_LOG_WARN, file->log, 0,
 						   "ts size=%d is bigger than %d, what's the matter?",
 						   *out_size + sizeof(packet), NGX_RTMP_HLS_BUFSIZE);
 			return -1;
 		}
+
         //rc = ngx_write_file(file, packet, sizeof(packet), file->offset);
 		ngx_memcpy(out_buffer + *out_size, packet, sizeof(packet));
 		*out_size += sizeof(packet);

@@ -13,11 +13,11 @@
 #include "ngx_rtmp.h"
 
 
-#define NGX_RTMP_RECORD_OFF             0x01
-#define NGX_RTMP_RECORD_AUDIO           0x02
-#define NGX_RTMP_RECORD_VIDEO           0x04
+#define NGX_RTMP_RECORD_OFF                   0x01
+#define NGX_RTMP_RECORD_AUDIO               0x02
+#define NGX_RTMP_RECORD_VIDEO               0x04
 #define NGX_RTMP_RECORD_KEYFRAMES       0x08
-#define NGX_RTMP_RECORD_MANUAL          0x10
+#define NGX_RTMP_RECORD_MANUAL            0x10
 
 //using in remote conf 
 typedef enum {
@@ -40,11 +40,15 @@ typedef struct {
     ngx_flag_t                          notify;
     ngx_url_t                          *url;
 
-    ngx_str_t                           usr_id;
+    ngx_str_t                           user_id;
     ngx_str_t                           is_public;
     ngx_str_t                           bucket;
     ngx_str_t                           notify_url;
-    size_t                              vdoid;
+    size_t                                vdoid;
+    ngx_flag_t                          screenshot_is_cover;
+
+    ngx_str_t                          region_pic;
+    ngx_str_t                          host_pic;
 
     void                              **rec_conf;
     ngx_array_t                         rec; /* ngx_rtmp_record_app_conf_t * */
@@ -57,8 +61,8 @@ typedef struct {
     ngx_file_t                          file, file_index;
     ngx_uint_t                          nframes;
     ngx_int_t                           interval;      // for remote conf
-    u_char                              *abs_path;
-    u_char                              *publish_time;
+    u_char                             *abs_path;
+    u_char                             *publish_time;
     uint32_t                            epoch, time_shift;
     ngx_time_t                          last;
     time_t                              timestamp;
@@ -74,7 +78,6 @@ typedef struct {
 
 typedef struct {
     ngx_array_t                         rec; /* ngx_rtmp_record_rec_ctx_t */
-    ngx_uint_t                          counts;
     u_char                              name[NGX_RTMP_MAX_NAME];
     u_char                              args[NGX_RTMP_MAX_ARGS];
     u_char                              abs_path[NGX_MAX_PATH];

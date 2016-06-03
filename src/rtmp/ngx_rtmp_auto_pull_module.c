@@ -127,7 +127,7 @@ ngx_rtmp_auto_pull_init_process(ngx_cycle_t *cycle)
     if (ls->sockaddr == NULL) {
         return NGX_ERROR;
     }
-    
+
     saun->sun_family = AF_UNIX;
     *ngx_snprintf((u_char *) saun->sun_path, sizeof(saun->sun_path),
                   "%V/" NGX_RTMP_AUTO_PULL_SOCKNAME ".%i",

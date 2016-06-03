@@ -9,10 +9,14 @@
 #include "ngx_rtmp.h"
 #include "ngx_rtmp_amf.h"
 #include "ngx_rtmp_live_module.h"
+#include "ngx_rtmp_log_module.h"
 
 
 static void ngx_rtmp_ping(ngx_event_t *rev);
 static ngx_int_t ngx_rtmp_finalize_set_chunk_size(ngx_rtmp_session_t *s);
+static void ngx_rtmp_update_send_delay(ngx_rtmp_session_t *s);
+static void ngx_rtmp_live_update_delay(ngx_rtmp_session_t* s,
+        ngx_uint_t type, ngx_uint_t timestamp, ngx_uint_t recv_time);
 
 
 ngx_uint_t                  ngx_rtmp_naccepted;
@@ -165,14 +169,14 @@ ngx_rtmp_ping(ngx_event_t *pev)
     }
 
     if (s->ping_active) {
-        ngx_log_error(NGX_LOG_INFO, c->log, 0,
+        ngx_log_error(NGX_LOG_ERR, c->log, 0,
                 "ping: unresponded");
         ngx_rtmp_finalize_session(s);
         return;
     }
 
     if (cscf->busy) {
-        ngx_log_error(NGX_LOG_INFO, c->log, 0,
+        ngx_log_error(NGX_LOG_ERR, c->log, 0,
                 "ping: not busy between pings");
         ngx_rtmp_finalize_session(s);
         return;
@@ -226,7 +230,7 @@ ngx_rtmp_recv(ngx_event_t *rev)
         if (st->in == NULL) {
             st->in = ngx_rtmp_alloc_in_buf(s);
             if (st->in == NULL) {
-                ngx_log_error(NGX_LOG_INFO, c->log, 0,
+                ngx_log_error(NGX_LOG_ERR, c->log, 0,
                         "in buf alloc failed");
                 ngx_rtmp_finalize_session(s);
                 return;
@@ -327,7 +331,7 @@ ngx_rtmp_recv(ngx_event_t *rev)
                     (int)fmt, csid);
 
             if (csid >= (uint32_t)cscf->max_streams) {
-                ngx_log_error(NGX_LOG_INFO, c->log, 0,
+                ngx_log_error(NGX_LOG_ERR, c->log, 0,
                     "RTMP in chunk stream too big: %D >= %D",
                     csid, cscf->max_streams);
                 ngx_rtmp_finalize_session(s);
@@ -406,6 +410,15 @@ ngx_rtmp_recv(ngx_event_t *rev)
                 pp[2] = *p++;
                 pp[1] = *p++;
                 pp[0] = *p++;
+                
+                /* When fmt == 3, after chunk header may not 
+                 * have 4 bytes for ext timestamp */
+                if (3 == fmt) {
+                    if (timestamp != h->timestamp) {
+                        p = p - 4;
+                        ngx_log_debug0(NGX_LOG_DEBUG_RTMP, c->log, 0, " fmt == 3 , dont have ext timestamp for old protocol");
+                    }
+                }
             }
 
             if (st->len == 0) {
@@ -433,7 +446,7 @@ ngx_rtmp_recv(ngx_event_t *rev)
             b->pos = p;
 
             if (h->mlen > cscf->max_message) {
-                ngx_log_error(NGX_LOG_INFO, c->log, 0,
+                ngx_log_error(NGX_LOG_ERR, c->log, 0,
                         "too big message: %uz mlen: %D", cscf->max_message, h->mlen);
                 ngx_rtmp_finalize_session(s);
                 return;
@@ -507,7 +520,7 @@ ngx_rtmp_send(ngx_event_t *wev)
     }
 
     if (wev->timedout) {
-        ngx_log_error(NGX_LOG_INFO, c->log, NGX_ETIMEDOUT,
+        ngx_log_error(NGX_LOG_ERR, c->log, NGX_ETIMEDOUT,
                 "client timed out");
         c->timedout = 1;
         ngx_rtmp_finalize_session(s);
@@ -544,24 +557,24 @@ ngx_rtmp_send(ngx_event_t *wev)
         s->ping_reset = 1;
 
       	ngx_rtmp_update_bandwidth(&ngx_rtmp_bw_out, n);
+
       	if(ctx && ctx->stream){ 
-			ngx_rtmp_update_bandwidth(&ctx->stream->bw_out, n);
+            ngx_rtmp_update_bandwidth(&ctx->stream->bw_out, n);
+
+            if (s->relay_type == NGX_NONE_RELAY) {
+
+          	    ngx_rtmp_update_bandwidth(&ctx->stream->bw_billing_out, n);
+          	}
       	}
-
-		if (ctx && ctx->stream) {
-
-			if (s->relay_type == NGX_NONE_RELAY) {
-
-				ngx_rtmp_update_bandwidth(&ctx->stream->bw_billing_out, n);
-			}
-		}
 
         s->out_bpos += n;
         if (s->out_bpos == s->out_chain->buf->last) {
             s->out_chain = s->out_chain->next;
             if (s->out_chain == NULL) {
                 cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
+                ngx_rtmp_update_send_delay(s);
                 ngx_rtmp_free_shared_chain(cscf, s->out[s->out_pos]);
+                s->out[s->out_pos] = NULL;
                 ++s->out_pos;
                 s->out_pos %= s->out_queue;
                 if (s->out_pos == s->out_last) {
@@ -599,7 +612,7 @@ ngx_rtmp_prepare_message(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
 
     if (h->csid >= (uint32_t)cscf->max_streams) {
-        ngx_log_error(NGX_LOG_INFO, c->log, 0,
+        ngx_log_error(NGX_LOG_ERR, c->log, 0,
                 "RTMP out chunk stream too big: %D >= %D",
                 h->csid, cscf->max_streams);
         ngx_rtmp_finalize_session(s);
@@ -733,7 +746,6 @@ ngx_rtmp_send_message(ngx_rtmp_session_t *s, ngx_chain_t *out,
 
     if (!ngx_rtmp_type(s->protocol)) {
 
-        ngx_rtmp_acquire_shared_chain(out);
         return NGX_OK;
     }
 
@@ -751,7 +763,7 @@ ngx_rtmp_send_message(ngx_rtmp_session_t *s, ngx_chain_t *out,
                 "RTMP drop message bufs=%ui, priority=%ui",
                 nmsg, priority);
     */
-        ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+        ngx_log_error(NGX_LOG_WARN, s->connection->log, 0,
             "RTMP drop message bufs=%ui, priority=%ui, s->out_last=%d, s->out_pos=%d, s->out_queue=%d ",
             nmsg, priority, s->out_last, s->out_pos, s->out_queue);
         return NGX_AGAIN;
@@ -816,6 +828,9 @@ ngx_rtmp_receive_message(ngx_rtmp_session_t *s,
     evhs = &cmcf->events[h->type];
     evh = evhs->elts;
 
+    s->log_bpos = s->log_buf;
+    s->log_bpos = ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d", h->type);
+
     ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
             "nhandlers: %d", evhs->nelts);
 
@@ -834,6 +849,29 @@ ngx_rtmp_receive_message(ngx_rtmp_session_t *s,
             case NGX_DONE:
                 return NGX_OK;
         }
+    }
+
+    *s->log_bpos++ = 0;
+
+    switch(h->type) {
+        case NGX_RTMP_MSG_AUDIO:
+        {
+            if (!s->audio_recved) {
+                s->audio_recved = 1;
+                ngx_rtmp_log_evt_in(s);
+            }
+            break;
+        }
+        case NGX_RTMP_MSG_VIDEO:
+        {
+            if (!s->video_recved) {
+                s->video_recved = 1;
+                ngx_rtmp_log_evt_in(s);
+            }
+            break;
+        }
+        default:
+            ngx_rtmp_log_evt_in(s);
     }
 
     return NGX_OK;
@@ -922,4 +960,227 @@ ngx_rtmp_finalize_set_chunk_size(ngx_rtmp_session_t *s)
     return NGX_OK;
 }
 
+void
+ngx_rtmp_update_recv_delay(ngx_rtmp_session_t *s,
+        ngx_rtmp_header_t *h, ngx_chain_t* in)
+{
+    ngx_uint_t              recv_time;
+    ngx_rtmp_chunk_info_t   *ci;
+
+    if (h->type != NGX_RTMP_MSG_AUDIO && h->type != NGX_RTMP_MSG_VIDEO) {
+        return;
+    }
+
+    recv_time = ngx_rtmp_get_utc_time();
+
+    ci = ngx_rtmp_get_chunk_info(in);
+    ci->type = h->type;
+    ci->timestamp = h->timestamp;
+    ci->is_raw = 1;
+    ci->recv_time = recv_time;
+
+    ngx_rtmp_live_update_delay(s, h->type, h->timestamp, recv_time);
+}
+
+static void
+ngx_rtmp_update_send_delay(ngx_rtmp_session_t *s)
+{
+    ngx_rtmp_chunk_info_t   *ci;
+    ngx_chain_t             *out;
+
+    out = s->out[s->out_pos];
+    ci = ngx_rtmp_get_chunk_info(out);
+
+    if (ci->type != NGX_RTMP_MSG_AUDIO && ci->type != NGX_RTMP_MSG_VIDEO) {
+        return;
+    }
+
+    if (!ci->is_raw) {
+        return;
+    }
+
+    ngx_rtmp_live_update_delay(s, ci->type, ci->timestamp, ci->recv_time);
+}
+
+static void
+ngx_rtmp_append_delay(ngx_rtmp_session_t *s)
+{
+    ngx_rtmp_delay_t    *d;
+    
+    if (s->delay == NULL) {
+        s->delay = s->delay_cur;
+        s->delay_cur = NULL;
+        return;
+    }
+
+    for (d = s->delay; d->next != NULL; d = d->next);
+
+    d->next = s->delay_cur;
+    s->delay_cur = NULL;
+}
+
+static ngx_rtmp_delay_t*
+ngx_rtmp_alloc_delay(ngx_rtmp_session_t *s)
+{
+    ngx_rtmp_delay_t    *delay;
+
+    if (s->delay_cur) return s->delay_cur;
+    
+    if (s->delay_free) {
+        delay = s->delay_free;
+        s->delay_free = s->delay_free->next;
+        ngx_memzero(delay, sizeof(ngx_rtmp_delay_t));
+        s->delay_cur = delay;
+        return delay;
+    }
+    
+    delay = ngx_palloc(s->connection->pool, sizeof(ngx_rtmp_delay_t));
+    if (delay == NULL) {
+        return NULL;
+    }
+
+    ngx_memzero(delay, sizeof(ngx_rtmp_delay_t));
+    s->delay_cur = delay;
+    return delay;
+}
+
+static void
+ngx_rtmp_live_update_delay(ngx_rtmp_session_t* s,
+        ngx_uint_t type, ngx_uint_t timestamp,
+        ngx_uint_t recv_time)
+{
+    ngx_rtmp_delay_t               *delay;
+    ngx_int_t                       cur_utc;
+    ngx_rtmp_codec_ctx_t           *codec_ctx;
+    ngx_rtmp_live_stream_t         *stream;
+    ngx_rtmp_live_ctx_t            *ctx, *orictx, *pubctx;
+    ngx_int_t                       audio_delay;
+    ngx_uint_t                      audio_frame_size;
+
+    orictx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
+    if (orictx == NULL || orictx->stream == NULL) {
+        return;
+    }
+
+    stream = orictx->stream;
+    if (!stream->publishing) {
+        return;
+    }
+
+    pubctx = NULL;
+    if (orictx->publishing) {
+
+        pubctx = orictx;
+    } else {
+
+        for (ctx = stream->ctx; ctx; ctx = ctx->next) {
+
+            if (ctx->publishing) {
+
+                pubctx = ctx;
+                break;
+            }
+        }
+    }
+
+    if (pubctx == NULL) {
+
+        return;
+    }
+
+    codec_ctx = ngx_rtmp_get_module_ctx(pubctx->session, ngx_rtmp_codec_module);
+    if (codec_ctx == NULL || !(codec_ctx->interval > 0)) {
+
+        return;
+    }
+
+    delay = ngx_rtmp_alloc_delay(s);
+    if (delay == NULL) {
+        return;
+    }
+
+    cur_utc = (ngx_int_t)ngx_rtmp_get_utc_time();
+
+    if (type == NGX_RTMP_MSG_VIDEO) { // video
+
+        ++ delay->video_frame_num;
+        return;
+    }
+
+    if (codec_ctx->first_audio_pts == NGX_MAX_INT32_VALUE) { // first audio frame
+
+        codec_ctx->first_audio_pts = timestamp;
+        ngx_log_debug(NGX_LOG_DEBUG, s->connection->log, 0,
+                "count first audio frame, time: %i, pts: %i", cur_utc, timestamp);
+    }
+    
+    if (delay->start_time == 0) {
+
+        delay->last_audio_pts = timestamp;
+        delay->start_time = cur_utc;
+        delay->audio_delay_min = ((ngx_uint_t)(-1)) >>1 ;
+        delay->audio_delay_max = ~ delay->audio_delay_min;
+        ngx_log_debug(NGX_LOG_DEBUG,  s->connection->log, 0,
+                "log delay start, time: %i, pts: %i", cur_utc, timestamp);
+    } else {
+
+        /* real time delta minus pts delta */
+        audio_delay =  (cur_utc - delay->start_time) - (timestamp - delay->last_audio_pts);
+
+        if (delay->audio_delay_min > audio_delay) {
+            delay->audio_delay_min = audio_delay;
+        }
+
+        if (delay->audio_delay_max < audio_delay) {
+            delay->audio_delay_max = audio_delay;
+        }
+    }
+
+    /* time to log */
+    if (timestamp / codec_ctx->interval  >  delay->last_audio_pts / codec_ctx->interval) {
+        ngx_log_debug(NGX_LOG_DEBUG,  s->connection->log, 0,
+                "time to log delay, time: %i, pts: %i", cur_utc, timestamp);
+        /* last delay */
+        delay->cur_audio_pts = timestamp;
+        delay->audio_recv_time = cur_utc;
+        delay->time_cost = cur_utc - delay->start_time;
+        if (orictx->publishing) { // publisher
+
+            delay->send_delay = 0;
+            delay->recv_delay = (cur_utc - codec_ctx->utc_start_time) - timestamp;
+        } else { // player
+
+            delay->recv_delay = 0;
+            delay->send_delay = cur_utc - recv_time;
+        }
+
+        delay->audio_duration /= 1000; // us -> ms
+        ngx_rtmp_append_delay(s);
+
+        // new delay
+        delay = ngx_rtmp_alloc_delay(s);
+        if (delay == NULL) {
+            return;
+        }
+
+        delay->start_time = cur_utc;
+        delay->audio_duration = 0;
+        delay->last_audio_pts = timestamp;
+        delay->video_frame_num = 0;
+    }
+    audio_frame_size = NGX_RTMP_AUDIO_FRAME_SIZE_AAC;
+    switch (codec_ctx->audio_codec_id) {
+        case NGX_RTMP_AUDIO_MP3:
+            audio_frame_size = NGX_RTMP_AUDIO_FRAME_SIZE_MP3;
+            break;
+        case NGX_RTMP_AUDIO_AAC:
+            audio_frame_size = NGX_RTMP_AUDIO_FRAME_SIZE_AAC;
+            break;
+        default:
+            break; 
+    }
+    delay->audio_duration += codec_ctx->sample_rate > 0
+        ? audio_frame_size * 1000 * 1000 / codec_ctx->sample_rate//us 
+        : 0;
+}
 
