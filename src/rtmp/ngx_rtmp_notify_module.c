@@ -36,6 +36,8 @@ static ngx_int_t ngx_rtmp_notify_get_codec(ngx_rtmp_session_t *s,
        codec_st *codec_data);
 static ngx_int_t ngx_rtmp_notify_connect_json_decode(ngx_rtmp_session_t *s, char *jsonstr);
 
+static ngx_int_t ngx_rtmp_notity_set_finalize_code(ngx_rtmp_session_t *s);
+
 ngx_str_t   ngx_rtmp_notify_urlencoded =
             ngx_string("application/x-www-form-urlencoded");
 
@@ -304,7 +306,7 @@ ngx_rtmp_notify_create_request(ngx_rtmp_session_t *s, ngx_pool_t *pool,
         bl = cl;
     }
 
-    ret = ngx_rtmp_netcall_http_format_request(method, &url->host,
+    ret = ngx_rtmp_netcall_http_format_request(method, &url->host, url->family,
                                                 &url->uri, extra, al, bl, pool,
                                                 &ngx_rtmp_notify_urlencoded);
     return ret;
@@ -391,7 +393,7 @@ ngx_rtmp_notify_connect_create(ngx_rtmp_session_t *s, void *arg,
         al = NULL;
     }
    
-    return ngx_rtmp_netcall_http_format_request(NGX_RTMP_NETCALL_HTTP_GET/*nscf->method*/, &url->host,
+    return ngx_rtmp_netcall_http_format_request(NGX_RTMP_NETCALL_HTTP_GET/*nscf->method*/, &url->host, url->family,
                                                 &url->uri, &s->args, al, bl, pool,
                                                 &ngx_rtmp_notify_urlencoded);
 }
@@ -446,7 +448,7 @@ ngx_rtmp_notify_disconnect_create(ngx_rtmp_session_t *s, void *arg,
         al = NULL;
     }
 
-    return ngx_rtmp_netcall_http_format_request(NGX_RTMP_NETCALL_HTTP_GET/*nscf->method*/, &url->host,
+    return ngx_rtmp_netcall_http_format_request(NGX_RTMP_NETCALL_HTTP_GET/*nscf->method*/, &url->host, url->family,
                                                 &url->uri, &s->args, al, bl, pool,
                                                 &ngx_rtmp_notify_urlencoded);
 }
@@ -674,7 +676,8 @@ ngx_rtmp_notify_update_create(ngx_rtmp_session_t *s, void *arg,
                             sizeof("&bw_in_audio=") + sizeof(uint64_t) +
                             sizeof("&bw_in_video=") + sizeof(uint64_t) +
                             sizeof("&bw_real=") + sizeof(uint64_t) +
-                            sizeof("&bw_in") + sizeof(uint64_t));
+                            sizeof("&bw_in=") + sizeof(uint64_t) +
+                            sizeof("&real_framerate=") + sizeof(ngx_uint_t));
     if (b == NULL) {
         return NULL;
     }
@@ -758,19 +761,30 @@ ngx_rtmp_notify_update_create(ngx_rtmp_session_t *s, void *arg,
     b->last = ngx_sprintf(b->last, "%ui", codec_data->sample_rate);
 
     if (ctx_live && stream){
-
+        /*in audio bw*/
         b->last = ngx_cpymem(b->last, (u_char*) "&bw_in_audio=",
                              sizeof("&bw_in_audio=") - 1);
         b->last = ngx_sprintf(b->last, "%ul", stream->bw_in_audio.bandwidth);
+
+        /*in video bw*/
         b->last = ngx_cpymem(b->last, (u_char*) "&bw_in_video=",
                              sizeof("&bw_in_video=") - 1);
         b->last = ngx_sprintf(b->last, "%ul", stream->bw_in_video.bandwidth);
+
+        /*in real video bw*/
         b->last = ngx_cpymem(b->last, (u_char*) "&bw_real=",
                              sizeof("&bw_real=") - 1);
         b->last = ngx_sprintf(b->last, "%ul", stream->bw_real.bandwidth);
+
+        /*bw*/
         b->last = ngx_cpymem(b->last, (u_char*) "&bw_in=",
                              sizeof("&bw_in=") - 1);
         b->last = ngx_sprintf(b->last, "%ul", stream->bw_in.bandwidth);
+
+        /*real frame rate*/
+        b->last = ngx_cpymem(b->last, (u_char*) "&real_framerate=",
+                             sizeof("&real_framerate=") - 1);
+        b->last = ngx_sprintf(b->last, "%ui", stream->frame_rate.real_frame_rate);
     }
     
     return ngx_rtmp_notify_create_request(s, pool, NGX_RTMP_NOTIFY_UPDATE, pl, &s->args);
@@ -1057,13 +1071,16 @@ ngx_rtmp_notify_connect_handle(ngx_rtmp_session_t *s,
     ngx_rtmp_connect_t *v = arg;
 
     ngx_str_t               http_ret;
-    ngx_int_t               rc;
+    ngx_int_t               rc, rc1;
     u_char                  str_result[NGX_RTMP_MAX_RESULT];
     u_char                  ret_code[NGX_RTMP_MAX_NAME];
+   
+    u_char                  str_code[NGX_RTMP_MAX_NAME];
     ngx_rtmp_netcall_ctx_t *ctx;
 
-    static ngx_str_t result = ngx_string("result");
-
+    static ngx_str_t        result = ngx_string("result");
+    static ngx_str_t        code = ngx_string("code");
+    
     if (!in) {
 		ngx_log_error(NGX_LOG_WARN, s->connection->log, 0,
 			    "notify: connect received none!");
@@ -1078,19 +1095,21 @@ ngx_rtmp_notify_connect_handle(ngx_rtmp_session_t *s,
 
     ngx_memzero(ret_code, NGX_RTMP_MAX_NAME);
     rc = ngx_rtmp_notify_parse_http_retcode(s, in, ret_code);
-    if (rc != NGX_OK) {
-        goto disconnect;
-    }
+
+    ngx_memzero(str_code, NGX_RTMP_MAX_NAME);
+    ngx_rtmp_notify_parse_http_header(s, in, &code, str_code, sizeof(str_code) - 1);
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
     if (ctx) {
         *ngx_snprintf(ctx->ret_code, sizeof(ctx->ret_code) - 1, "%s", ret_code) = 0;
+        *ngx_snprintf(ctx->description, sizeof(ctx->description) - 1, "%s", str_code) = 0;
     }
 
     ngx_memzero(&str_result, sizeof(str_result));
-    rc = ngx_rtmp_notify_parse_http_header(s, in, &result, 
+    rc1 = ngx_rtmp_notify_parse_http_header(s, in, &result, 
             str_result, sizeof(str_result) - 1);
-    if (rc <= 0){
+    
+    if (rc != NGX_OK || rc1 <= 0){
         goto disconnect;
     }
 
@@ -1103,6 +1122,7 @@ ngx_rtmp_notify_connect_handle(ngx_rtmp_session_t *s,
     return next_connect(s, v);
 
 disconnect:
+    ngx_rtmp_notity_set_finalize_code(s);
     return NGX_ERROR;
 }
 
@@ -1122,6 +1142,12 @@ ngx_rtmp_notify_set_name(u_char *dst, size_t dst_len, u_char *src,
     *p = '\0';
 }
 
+static ngx_int_t
+ngx_rtmp_notity_set_finalize_code(ngx_rtmp_session_t *s)
+{
+    s->finalize_code = NGX_RTMP_LOG_FINALIZE_DS_CLOSE_PUBLISHER;
+    return NGX_OK;
+}
 
 static ngx_int_t
 ngx_rtmp_notify_publish_handle(ngx_rtmp_session_t *s,
@@ -1161,9 +1187,6 @@ ngx_rtmp_notify_publish_handle(ngx_rtmp_session_t *s,
 
     ngx_memzero(ret_code, NGX_RTMP_MAX_NAME);
     rc = ngx_rtmp_notify_parse_http_retcode(s, in, ret_code);
-    if (rc != NGX_OK) {
-        goto disconnect;
-    }
 
     /* write the status code and description */
     ngx_memzero(str_code, NGX_RTMP_MAX_NAME);
@@ -1172,8 +1195,12 @@ ngx_rtmp_notify_publish_handle(ngx_rtmp_session_t *s,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
     if (ctx) {
-        *ngx_snprintf(ctx->ret_code, sizeof(ctx->ret_code), "%s", ret_code) = 0;
-        *ngx_snprintf(ctx->description, sizeof(ctx->description), "%s", str_code) = 0;
+        *ngx_snprintf(ctx->ret_code, sizeof(ctx->ret_code) - 1, "%s", ret_code) = 0;
+        *ngx_snprintf(ctx->description, sizeof(ctx->description) - 1, "%s", str_code) = 0;
+    }
+
+    if (rc != NGX_OK) {
+        goto disconnect;
     }
 
     /* rtmp return code */
@@ -1246,6 +1273,7 @@ next:
     return next_publish(s, v);
 
 disconnect:
+    ngx_rtmp_notity_set_finalize_code(s);
     return NGX_ERROR;
 }
 
@@ -1882,7 +1910,7 @@ ngx_rtmp_notify_play1(ngx_rtmp_session_t *s, ngx_rtmp_play_t *v)
 
     ngx_memzero(&ci, sizeof(ci));
 
-    ci.name = (u_char*)ngx_rtmp_notify_app_names[NGX_RTMP_NOTIFY_PLAYING];
+    ci.name = (u_char*)ngx_rtmp_notify_app_names[NGX_RTMP_NOTIFY_PLAY];
     ci.url = url;
     ci.create = ngx_rtmp_notify_play_create;
     ci.handle = ngx_rtmp_notify_play_handle;

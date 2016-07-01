@@ -21,20 +21,9 @@ stop()
     echo 'stop...'
 }
 
-reload()
-{
-    exist=`pidof lmss`
-    if [ -n "$exist" ]; then
-        sudo ${ROOT_PATH}/sbin/lmss -p /usr/local/lmss/ -c ${ROOT_PATH}/conf/lmss.conf -s reload
-        echo 'reload...'
-    else
-        echo 'Please start lmss...'
-    fi
-}
-
 case C"$1" in
     C)
-        echo "Usage: $0 {start|stop|reload}"
+        echo "Usage: $0 {start|stop}"
         ;;
     Cstart)
         start
@@ -44,12 +33,8 @@ case C"$1" in
         stop
         echo "Done!"
         ;;
-    Creload)
-        reload
-        echo "Done!"
-        ;;
     C*)
-        echo "Usage: $0 {start|stop|reload}"
+        echo "Usage: $0 {start|stop}"
         ;;
 esac
 

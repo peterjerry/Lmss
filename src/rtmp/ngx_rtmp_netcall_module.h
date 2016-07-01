@@ -99,7 +99,7 @@ ngx_chain_t * ngx_rtmp_netcall_http_user_format_session(ngx_rtmp_session_t *s,
 ngx_chain_t * ngx_rtmp_netcall_http_format_session(ngx_rtmp_session_t *s,
         ngx_pool_t *pool);
 ngx_chain_t * ngx_rtmp_netcall_http_format_request(ngx_int_t method,
-        ngx_str_t *host, ngx_str_t *uri, ngx_str_t *extra, ngx_chain_t *args,
+        ngx_str_t *host, int family, ngx_str_t *uri, ngx_str_t *extra, ngx_chain_t *args,
         ngx_chain_t *body, ngx_pool_t *pool, ngx_str_t *content_type);
 ngx_chain_t * ngx_rtmp_netcall_http_skip_header(ngx_chain_t *in);
 

@@ -168,6 +168,8 @@ ngx_rtmp_ping(ngx_event_t *pev)
         return;
     }
 
+    s->finalize_code = NGX_RTMP_LOG_FINALIZE_RTMP_PING_ERR_CODE;
+
     if (s->ping_active) {
         ngx_log_error(NGX_LOG_ERR, c->log, 0,
                 "ping: unresponded");
@@ -189,6 +191,8 @@ ngx_rtmp_ping(ngx_event_t *pev)
         ngx_rtmp_finalize_session(s);
         return;
     }
+
+    s->finalize_code = NGX_RTMP_LOG_FINALIZE_CLIENT_CLOSE_SESSION_CODE;
 
     s->ping_active = 1;
     ngx_add_timer(pev, cscf->ping_timeout);
@@ -232,6 +236,7 @@ ngx_rtmp_recv(ngx_event_t *rev)
             if (st->in == NULL) {
                 ngx_log_error(NGX_LOG_ERR, c->log, 0,
                         "in buf alloc failed");
+                s->finalize_code = NGX_RTMP_LOG_FINALIZE_RTMP_RECV_ERR_CODE;
                 ngx_rtmp_finalize_session(s);
                 return;
             }
@@ -262,12 +267,14 @@ ngx_rtmp_recv(ngx_event_t *rev)
             n = c->recv(c, b->last, b->end - b->last);
 
             if (n == NGX_ERROR || n == 0) {
+                s->finalize_code = NGX_RTMP_LOG_FINALIZE_RTMP_PUBLISHER_CLOSE_CODE;
                 ngx_rtmp_finalize_session(s);
                 return;
             }
 
             if (n == NGX_AGAIN) {
                 if (ngx_handle_read_event(c->read, 0) != NGX_OK) {
+                    s->finalize_code = NGX_RTMP_LOG_FINALIZE_RTMP_RECV_ERR_CODE;
                     ngx_rtmp_finalize_session(s);
                 }
                 return;
@@ -295,6 +302,7 @@ ngx_rtmp_recv(ngx_event_t *rev)
                         "sending RTMP ACK(%uD)", s->in_bytes);
 
                 if (ngx_rtmp_send_ack(s, s->in_bytes)) {
+                    s->finalize_code = NGX_RTMP_LOG_FINALIZE_RTMP_RECV_ERR_CODE;
                     ngx_rtmp_finalize_session(s);
                     return;
                 }
@@ -334,6 +342,7 @@ ngx_rtmp_recv(ngx_event_t *rev)
                 ngx_log_error(NGX_LOG_ERR, c->log, 0,
                     "RTMP in chunk stream too big: %D >= %D",
                     csid, cscf->max_streams);
+                s->finalize_code = NGX_RTMP_LOG_FINALIZE_PARSE_RTMP_HEAD_ERR_CODE;
                 ngx_rtmp_finalize_session(s);
                 return;
             }
@@ -448,6 +457,7 @@ ngx_rtmp_recv(ngx_event_t *rev)
             if (h->mlen > cscf->max_message) {
                 ngx_log_error(NGX_LOG_ERR, c->log, 0,
                         "too big message: %uz mlen: %D", cscf->max_message, h->mlen);
+                s->finalize_code = NGX_RTMP_LOG_FINALIZE_PARSE_RTMP_HEAD_ERR_CODE;
                 ngx_rtmp_finalize_session(s);
                 return;
             }
@@ -479,6 +489,9 @@ ngx_rtmp_recv(ngx_event_t *rev)
             h->timestamp += st->dtime;
 
             if (ngx_rtmp_receive_message(s, h, head) != NGX_OK) {
+                if (s->finalize_code == NGX_RTMP_LOG_FINALIZE_CLIENT_CLOSE_SESSION_CODE){
+                    s->finalize_code = NGX_RTMP_LOG_FINALIZE_RTMP_RECV_ERR_CODE;
+                }
                 ngx_rtmp_finalize_session(s);
                 return;
             }
@@ -615,6 +628,7 @@ ngx_rtmp_prepare_message(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         ngx_log_error(NGX_LOG_ERR, c->log, 0,
                 "RTMP out chunk stream too big: %D >= %D",
                 h->csid, cscf->max_streams);
+        s->finalize_code = NGX_RTMP_LOG_FINALIZE_PARSE_RTMP_HEAD_ERR_CODE;
         ngx_rtmp_finalize_session(s);
         return;
     }
@@ -829,7 +843,7 @@ ngx_rtmp_receive_message(ngx_rtmp_session_t *s,
     evh = evhs->elts;
 
     s->log_bpos = s->log_buf;
-    s->log_bpos = ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d", h->type);
+    s->log_bpos = ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d", h->type);
 
     ngx_log_debug1(NGX_LOG_DEBUG_RTMP, s->connection->log, 0,
             "nhandlers: %d", evhs->nelts);

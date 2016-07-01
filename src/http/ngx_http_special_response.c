@@ -359,9 +359,6 @@ static ngx_str_t ngx_http_error_pages[] = {
 };
 
 
-static ngx_str_t  ngx_http_get_name = { 3, (u_char *) "GET " };
-
-
 ngx_int_t
 ngx_http_special_response_handler(ngx_http_request_t *r, ngx_int_t error)
 {
@@ -553,7 +550,7 @@ ngx_http_send_error_page(ngx_http_request_t *r, ngx_http_err_page_t *err_page)
         return NGX_ERROR;
     }
 
-    if (uri.data[0] == '/') {
+    if (uri.len && uri.data[0] == '/') {
 
         if (err_page->value.lengths) {
             ngx_http_split_args(r, &uri, &args);
@@ -564,13 +561,13 @@ ngx_http_send_error_page(ngx_http_request_t *r, ngx_http_err_page_t *err_page)
 
         if (r->method != NGX_HTTP_HEAD) {
             r->method = NGX_HTTP_GET;
-            r->method_name = ngx_http_get_name;
+            r->method_name = ngx_http_core_get_method;
         }
 
         return ngx_http_internal_redirect(r, &uri, &args);
     }
 
-    if (uri.data[0] == '@') {
+    if (uri.len && uri.data[0] == '@') {
         return ngx_http_named_location(r, &uri);
     }
 

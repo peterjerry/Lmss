@@ -1,7 +1,2 @@
 cluster_id             0;               ## 此服务器所属的集群ID
 nginx_id               0;               ## 此服务器ID
-time_server_url        http://centertime.ksyun.com/time;
-time_update_interval   30s;
-resolver               114.114.114.114;
-resolver_timeout       30s;
-delay_log_interval     5s;

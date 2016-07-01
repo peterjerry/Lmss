@@ -381,6 +381,8 @@ ngx_rtmp_handshake_recv(ngx_event_t *rev)
         return;
     }
 
+    s->finalize_code = NGX_RTMP_LOG_FINALIZE_HANDSHAKE_RECV_ERR_CODE;
+
     if (rev->timedout) {
         ngx_log_error(NGX_LOG_ERR, c->log, NGX_ETIMEDOUT,
                 "handshake_recv: recv: client timed out");
@@ -489,6 +491,7 @@ ngx_rtmp_handshake_recv(ngx_event_t *rev)
             ngx_rtmp_handshake_send(c->write);
             break;
     }
+    s->finalize_code = NGX_RTMP_LOG_FINALIZE_CLIENT_CLOSE_SESSION_CODE;
 }
 
 
@@ -506,6 +509,8 @@ ngx_rtmp_handshake_send(ngx_event_t *wev)
     if (c->destroyed) {
         return;
     }
+
+    s->finalize_code = NGX_RTMP_LOG_FINALIZE_HANDSHAKE_SEND_ERR_CODE;
 
     if (wev->timedout) {
         ngx_log_error(NGX_LOG_ERR, c->log, NGX_ETIMEDOUT,
@@ -584,6 +589,8 @@ ngx_rtmp_handshake_send(ngx_event_t *wev)
             ngx_rtmp_handshake_done(s);
             break;
     }
+
+    s->finalize_code = NGX_RTMP_LOG_FINALIZE_CLIENT_CLOSE_SESSION_CODE;
 }
 
 

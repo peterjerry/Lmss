@@ -62,6 +62,7 @@ typedef struct {
     ngx_uint_t                          nframes;
     ngx_int_t                           interval;      // for remote conf
     u_char                             *abs_path;
+    u_char                             *index_path;
     u_char                             *publish_time;
     uint32_t                            epoch, time_shift;
     ngx_time_t                          last;

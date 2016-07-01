@@ -41,6 +41,7 @@ static ngx_int_t ngx_rtmp_live_connect(ngx_rtmp_session_t *s, ngx_rtmp_connect_t
 static ngx_int_t ngx_rtmp_live_create_flux_timer(ngx_rtmp_live_stream_t *stream);
 static ngx_int_t ngx_rtmp_live_create_check_timer(ngx_rtmp_live_stream_t *stream);
 static void ngx_rtmp_live_destory_check_timer(ngx_rtmp_live_stream_t *stream);
+static void ngx_rtmp_live_update_framerate(ngx_rtmp_real_frame_rate_t *fr, uint32_t dts);
 
 
 static ngx_command_t  ngx_rtmp_live_commands[] = {
@@ -699,7 +700,36 @@ ngx_rtmp_live_idle(ngx_event_t *pev)
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
                   "live: drop idle publisher");
 
+    s->finalize_code = NGX_RTMP_LOG_FINALIZE_DROP_IDLE_CODE;
+
     ngx_rtmp_finalize_session(s);
+}
+
+
+static void
+ngx_rtmp_live_update_framerate(ngx_rtmp_real_frame_rate_t *fr, uint32_t dts)
+{
+#define NGX_RTMP_FRAMERATE_INTERVAL  1
+
+    if (!fr) {
+        return;
+    }
+
+    if (ngx_cached_time->sec > fr->time_end) {
+        
+        fr->real_frame_rate = fr->intl_frame / (NGX_RTMP_FRAMERATE_INTERVAL + (ngx_cached_time->sec - fr->time_end));
+        fr->intl_frame = 0;
+        fr->time_end = ngx_cached_time->sec + NGX_RTMP_FRAMERATE_INTERVAL;
+    }
+
+    if (fr->pre_dts != dts) {
+        
+        fr->intl_frame++;
+    }
+
+    fr->pre_dts = dts;
+
+    return;
 }
 
 
@@ -1206,6 +1236,7 @@ ngx_rtmp_live_close(ngx_rtmp_session_t *s)
     }
 
     if (ctx->publishing || ctx->stream->active) {
+        s->finalize_code = NGX_RTMP_LOG_FINALIZE_DROP_IDLE_CODE;
         ngx_rtmp_live_stop(s);
     }
 
@@ -1260,7 +1291,8 @@ ngx_rtmp_live_close(ngx_rtmp_session_t *s)
         }
 
         if (ctx->stream->ctx != NULL &&
-            ctx->stream->ctx->next == NULL && ctx->stream->ctx->publishing) {
+            ctx->stream->ctx->next == NULL &&
+            ctx->stream->ctx->publishing) {
 
             if (ctx->stream->ctx->session->relay_type != NGX_NONE_RELAY) {
 
@@ -1714,13 +1746,12 @@ ngx_rtmp_live_gop_cache_send(ngx_rtmp_session_t *ss)
     }
 
     /* send metadata */
-
     if (meta && meta_version != player->meta_version) {
         ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
                        "live: meta");
 
         ss->log_bpos = ss->log_buf;
-        *ngx_sprintf(ss->log_bpos, " rtmp_msg_type:%d amf_msg_name:%s",
+        *ngx_sprintf(ss->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"amf_msg_name:%s",
                 NGX_RTMP_MSG_AMF_META, "onMetaData") = 0;
         ngx_rtmp_log_evt_out(ss);
 
@@ -1980,7 +2011,7 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
                            "live: meta");
 
             ss->log_bpos = ss->log_buf;
-            *ngx_sprintf(ss->log_bpos, " rtmp_msg_type:%d amf_msg_name:%s",
+            *ngx_sprintf(ss->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"amf_msg_name:%s",
                     NGX_RTMP_MSG_AMF_META, "onMetaData") = 0;
             ngx_rtmp_log_evt_out(ss);
 
@@ -1999,13 +2030,12 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
             cs->dropped = 0;
         }
 
-        /* send combine header */
-        ngx_rtmp_live_send_combine_header(s, ss, lh);
-
-
         /* absolute packet */
 
         if (!cs->active) {
+
+            /* send combine header */
+            ngx_rtmp_live_send_combine_header(s, ss, lh);
 
             if (mandatory) {
                 ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0, "live: skipping header");
@@ -2124,7 +2154,7 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
                     ss->audio_recved = 1;
                     ss->log_bpos = ss->log_buf;
-                    *ngx_sprintf(ss->log_bpos, " rtmp_msg_type:%ui", h->type) = 0;
+                    *ngx_sprintf(ss->log_bpos, BLANK_SPACE"rtmp_msg_type:%ui", h->type) = 0;
                     ngx_rtmp_log_evt_out(ss);
                 }
                 break;
@@ -2135,7 +2165,7 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
                     ss->video_recved = 1;
                     ss->log_bpos = ss->log_buf;
-                    *ngx_sprintf(ss->log_bpos, " rtmp_msg_type:%ui", h->type) = 0;
+                    *ngx_sprintf(ss->log_bpos, BLANK_SPACE"rtmp_msg_type:%ui", h->type) = 0;
                     ngx_rtmp_log_evt_out(ss);
                 }
                 break;
@@ -2150,6 +2180,7 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
             if (mandatory) {
                 ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,
                                "live: mandatory packet failed");
+                s->finalize_code = NGX_RTMP_LOG_FINALIZE_MANDATORY_PACKET_ERR_CODE;
                 ngx_rtmp_finalize_session(ss);
             }
 
@@ -2160,7 +2191,13 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         ++peers;
         ss->current_time = cs->timestamp;
 
+        /*update the out bandwidth*/
         ngx_rtmp_update_bandwidth(&pctx->bw_out, h->mlen);
+        
+        /*update the out video frame rate*/
+        if (h->type == NGX_RTMP_MSG_VIDEO) {
+            ngx_rtmp_live_update_framerate(&ctx->stream->frame_rate, h->timestamp);
+        }
     }
 
     if (rpkt) {
@@ -2179,7 +2216,14 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         ngx_rtmp_free_shared_chain(cscf, acopkt);
     }
 
+    /*update the video in video frame rate*/
+    if (h->type == NGX_RTMP_MSG_VIDEO) {
+        ngx_rtmp_live_update_framerate(&ctx->stream->frame_rate, h->timestamp);
+    }
+
+    /*update the bandwidth*/
     ngx_rtmp_update_bandwidth(&ctx->stream->bw_in, h->mlen);
+    
     ngx_rtmp_update_bandwidth(h->type == NGX_RTMP_MSG_AUDIO ?
                               &ctx->stream->bw_in_audio :
                               &ctx->stream->bw_in_video,

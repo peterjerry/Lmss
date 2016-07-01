@@ -45,11 +45,11 @@ typedef struct {
 #define ngx_set_str(str, text)                                               \
     (str)->len = ngx_strlen(text); (str)->data = (u_char *) text
 
-
 #define ngx_tolower(c)      (u_char) ((c >= 'A' && c <= 'Z') ? (c | 0x20) : c)
 #define ngx_toupper(c)      (u_char) ((c >= 'a' && c <= 'z') ? (c & ~0x20) : c)
 
 void ngx_strlow(u_char *dst, u_char *src, size_t n);
+
 
 #define ngx_strncmp(s1, s2, n)  strncmp((const char *) s1, (const char *) s2, n)
 
@@ -146,7 +146,6 @@ ngx_copy(u_char *dst, u_char *src, size_t len)
 
 
 u_char *ngx_cpystrn(u_char *dst, u_char *src, size_t n);
-u_char *ngx_strdup(ngx_pool_t *pool, u_char *str, size_t len);
 u_char *ngx_pstrdup(ngx_pool_t *pool, ngx_str_t *src);
 u_char * ngx_cdecl ngx_sprintf(u_char *buf, const char *fmt, ...);
 u_char * ngx_cdecl ngx_snprintf(u_char *buf, size_t max, const char *fmt, ...);
@@ -162,6 +161,7 @@ ngx_int_t ngx_strncasecmp(u_char *s1, u_char *s2, size_t n);
 u_char *ngx_strnstr(u_char *s1, char *s2, size_t n);
 
 u_char *ngx_strstrn(u_char *s1, char *s2, size_t n);
+u_char *ngx_strdup(ngx_pool_t *pool, u_char *str, size_t len);
 u_char *ngx_strcasestrn(u_char *s1, char *s2, size_t n);
 u_char *ngx_strlcasestrn(u_char *s1, u_char *last, u_char *s2, size_t n);
 
@@ -209,6 +209,7 @@ uintptr_t ngx_escape_uri(u_char *dst, u_char *src, size_t size,
     ngx_uint_t type);
 void ngx_unescape_uri(u_char **dst, u_char **src, size_t size, ngx_uint_t type);
 uintptr_t ngx_escape_html(u_char *dst, u_char *src, size_t size);
+uintptr_t ngx_escape_json(u_char *dst, u_char *src, size_t size);
 
 
 typedef struct {

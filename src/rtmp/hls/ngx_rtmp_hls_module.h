@@ -46,7 +46,13 @@ struct ngx_rtmp_hls_ctx_s {
     ngx_uint_t                          vod_max_frag;
     ngx_str_t                           upstream_url;
     ngx_str_t                           playlist;
-    ngx_str_t                           vodlist, vodm3u8tmp, vodm3u8bak, vodm3u8;
+    
+    ngx_str_t                           vodlist;
+    ngx_str_t                           vodm3u8tmp;
+    ngx_str_t                           vodm3u8bak;
+    ngx_str_t                           vodm3u8;
+    
+    ngx_str_t                           index_path;
     ngx_str_t                           playlist_bak;
     ngx_str_t                           var_playlist;
     ngx_str_t                           var_playlist_bak;
@@ -113,13 +119,13 @@ typedef struct {
     ngx_str_t                           mp4_vod_bucket;
     ngx_str_t                           mp4_vod_url;
 
-    ngx_str_t                          region_mp4;
-    ngx_str_t                          region_hls;
+    ngx_str_t                           region_mp4;
+    ngx_str_t                           region_hls;
     
-    ngx_str_t                          host_mp4;
-    ngx_str_t                          host_hls;
+    ngx_str_t                           host_mp4;
+    ngx_str_t                           host_hls;
     
-    ngx_flag_t                         hls_vod_auto_merge;
+    ngx_flag_t                          hls_vod_auto_merge;
 
     ngx_int_t                           granularity;
 } ngx_rtmp_hls_app_conf_t;

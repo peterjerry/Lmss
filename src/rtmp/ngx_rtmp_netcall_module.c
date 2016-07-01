@@ -498,13 +498,14 @@ ngx_rtmp_netcall_send(ngx_event_t *wev)
 
 
 ngx_chain_t *
-ngx_rtmp_netcall_http_format_request(ngx_int_t method, ngx_str_t *host,
+ngx_rtmp_netcall_http_format_request(ngx_int_t method, ngx_str_t *host, int family,
                                      ngx_str_t *uri, ngx_str_t *extra, 
                                      ngx_chain_t *args, ngx_chain_t *body,
                                      ngx_pool_t *pool, ngx_str_t *content_type)
 {
     ngx_chain_t                    *al, *bl, *ret;
     ngx_buf_t                      *b;
+    ngx_str_t                       realhost;
     size_t                          content_length;
     static const char              *methods[2] = { "GET", "POST" };
     static const char               rq_tmpl[] = " HTTP/1.0\r\n"
@@ -554,7 +555,13 @@ ngx_rtmp_netcall_http_format_request(ngx_int_t method, ngx_str_t *host,
         return NULL;
     }
 
-    b = ngx_create_temp_buf(pool, sizeof(rq_tmpl) + host->len + extra->len +
+    ngx_str_set(&realhost, "127.0.0.1");
+    
+    if (family != AF_UNIX){
+        realhost = *host;
+    }
+
+    b = ngx_create_temp_buf(pool, sizeof(rq_tmpl) + realhost.len + extra->len +
                             content_type->len + NGX_SIZE_T_LEN);
     if (b == NULL) {
         return NULL;
@@ -563,7 +570,7 @@ ngx_rtmp_netcall_http_format_request(ngx_int_t method, ngx_str_t *host,
     bl->buf = b;
 
     b->last = ngx_snprintf(b->last, b->end - b->last, rq_tmpl,
-                           host, extra, content_type, content_length);
+                           &realhost, extra, content_type, content_length);
 
     al->next = bl;
     bl->next = body;

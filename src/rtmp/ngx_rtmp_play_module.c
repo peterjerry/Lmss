@@ -431,7 +431,12 @@ ngx_rtmp_play_do_stop(ngx_rtmp_session_t *s)
         ngx_del_timer(&ctx->send_evt);
     }
 
-    if (ctx->send_evt.prev) {
+#if (nginx_version >= 1007005)
+        if (ctx->send_evt.posted)
+#else
+        if (ctx->send_evt.prev)
+#endif
+    {
         ngx_delete_posted_event((&ctx->send_evt));
     }
 
@@ -993,7 +998,7 @@ ngx_rtmp_play_remote_create(ngx_rtmp_session_t *s, void *arg, ngx_pool_t *pool)
     uri.len = p - uri.data;
 
     return ngx_rtmp_netcall_http_format_request(NGX_RTMP_NETCALL_HTTP_GET,
-                                                &pe->url->host, &uri, &args,
+                                                &pe->url->host, pe->url->family, &uri, &args,
                                                 NULL, NULL, pool, &text_plain);
 }
 

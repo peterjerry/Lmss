@@ -43,7 +43,7 @@ static ngx_int_t ngx_rtmp_http_hls_change_uri(ngx_http_request_t *r, ngx_str_t u
 static ngx_int_t ngx_rtmp_hls_open_file(ngx_http_request_t *r, ngx_chain_t *out);
 static ngx_int_t ngx_rtmp_http_hls_get_info(ngx_str_t *uri, ngx_str_t *app, ngx_str_t *name);
 static ngx_int_t ngx_rtmp_hls_init_indexfile(ngx_rtmp_session_t *s, ngx_str_t *dir);
-static ngx_int_t ngx_rtmp_hls_create_indexdir(ngx_rtmp_session_t *s);
+static ngx_int_t ngx_rtmp_hls_create_dir(ngx_rtmp_session_t *s, ngx_str_t *path);
 static ngx_int_t ngx_rtmp_hls_write_vod_m3u8bak(ngx_rtmp_session_t *s, uint64_t ts);
 static ngx_int_t ngx_rtmp_hls_write_vod_m3u8(ngx_rtmp_session_t *s);
 static ngx_int_t ngx_rtmp_hls_flush_expire(ngx_rtmp_session_t *s);
@@ -637,14 +637,14 @@ ngx_rtmp_hls_write_variant_playlist(ngx_rtmp_session_t *s)
 {
     static u_char             buffer[1024];
 
-    u_char                   *p, *last;
-    ssize_t                   rc;
-    ngx_fd_t                  fd;
-    ngx_str_t                *arg;
-    ngx_uint_t                n, k;
-    ngx_rtmp_hls_ctx_t       *ctx;
-    ngx_rtmp_hls_variant_t   *var;
-    ngx_rtmp_hls_app_conf_t  *hacf;
+    u_char                    *p, *last;
+    ssize_t                    rc;
+    ngx_fd_t                   fd;
+    ngx_str_t                 *arg;
+    ngx_uint_t                 n, k;
+    ngx_rtmp_hls_ctx_t        *ctx;
+    ngx_rtmp_hls_variant_t    *var;
+    ngx_rtmp_hls_app_conf_t   *hacf;
 
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
@@ -738,7 +738,7 @@ ngx_rtmp_hls_write_playlist(ngx_rtmp_session_t *s)
     ngx_uint_t                      i, max_frag;
     ngx_str_t                       name_part;
     const char                     *sep;
-	char                           *dot;
+    char                           *dot;
 
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
@@ -793,8 +793,8 @@ ngx_rtmp_hls_write_playlist(ngx_rtmp_session_t *s)
 	dot = hacf->nested ? "" : ".";
 
     for (i = 0; i < ctx->nfrags; i++) {
-        f = ngx_rtmp_hls_get_frag(s, i);
 
+        f = ngx_rtmp_hls_get_frag(s, i);
         p = ngx_snprintf(buffer, sizeof(buffer),
                          "%s"
                          "#EXTINF:%.3f,\n"
@@ -1058,7 +1058,7 @@ static ngx_int_t ngx_rtmp_hls_write_vod_m3u8(ngx_rtmp_session_t *s)
     
         return NGX_ERROR;
     }
-    
+
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
     if (ctx == NULL) {
     
@@ -1256,7 +1256,7 @@ ngx_rtmp_hls_write_vod_m3u8bak(ngx_rtmp_session_t *s, uint64_t ts)
             }
         }
         ctx->m3u8_header = 1;
-    }else {
+    } else {
 
         /*write m3u8 EXTINF*/
         ctx->m3u8filebak.fd = ngx_open_file(ctx->vodm3u8bak.data, NGX_FILE_WRONLY,  NGX_FILE_APPEND,
@@ -1295,7 +1295,7 @@ ngx_rtmp_hls_write_vod_m3u8bak(ngx_rtmp_session_t *s, uint64_t ts)
                 	ngx_close_file(ctx->m3u8filebak.fd);
                 	return NGX_ERROR;
                 }
-            }else {
+            } else {
 
                 f = ngx_rtmp_hls_get_frag(s, ctx->nfrags -1);
                 *ngx_snprintf(buffer, sizeof(buffer),
@@ -1324,16 +1324,18 @@ ngx_rtmp_hls_write_vod_m3u8bak(ngx_rtmp_session_t *s, uint64_t ts)
 static ngx_int_t
 ngx_rtmp_hls_vod_write_over(ngx_rtmp_session_t *s)
 {
-    ngx_rtmp_hls_ctx_t    *ctx;
-    u_char                       buff[1024], *p;
-    ngx_file_t                   file;
+#define   INDEX_BUFF_LEN    1024
+ 
+    ngx_rtmp_hls_ctx_t      *ctx;
+    u_char                   buff[INDEX_BUFF_LEN], *p;
+    ngx_file_t               file;
 	
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
     if (ctx == NULL) {
         return NGX_ERROR;
     }
 
-    ngx_memzero(buff, 1024);
+    ngx_memzero(buff, INDEX_BUFF_LEN);
     p = ngx_cpymem(buff, ctx->vodlist.data, ctx->vodlist.len);
 
     *ngx_cpymem(p, "end", sizeof("end")) = 0;
@@ -1597,10 +1599,8 @@ ngx_rtmp_hls_restore_stream(ngx_rtmp_session_t *s)
                 last--;
             }
 
-
 #define NGX_RTMP_MSEQ           "#EXT-X-MEDIA-SEQUENCE:"
 #define NGX_RTMP_MSEQ_LEN       (sizeof(NGX_RTMP_MSEQ) - 1)
-
 
             if (ngx_memcmp(p, NGX_RTMP_MSEQ, NGX_RTMP_MSEQ_LEN) == 0) {
 
@@ -1775,7 +1775,7 @@ ngx_rtmp_hls_flush_expire(ngx_rtmp_session_t *s)
     ngx_int_t                   n;
     u_char                      buff[1024], *p;
     char                       *p1;
-    
+
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);  
 
     if (hacf == NULL) {
@@ -1827,12 +1827,12 @@ ngx_rtmp_hls_flush_expire(ngx_rtmp_session_t *s)
 ngx_int_t
 ngx_rtmp_hls_read_expire(ngx_str_t *path, ngx_msec_t *out_expire)
 {
-    u_char                              buff[1024], dir[1024], *pcur;
-    char                               *p;
-    ngx_file_info_t                     fi;
-    ngx_uint_t                          nlen, nlen1;
-    ngx_file_t                          expire_file;
-    ngx_msec_t                          expire = 0;
+    u_char                               buff[1024], dir[1024], *pcur;
+    char                                *p;
+    ngx_file_info_t                      fi;
+    ngx_uint_t                           nlen, nlen1;
+    ngx_file_t                           expire_file;
+    ngx_msec_t                           expire = 0;
 
     ngx_memzero(&expire_file, sizeof(expire_file));
     ngx_str_set(&expire_file.name, NGX_RTMP_HLS_EXIPRE_FILE_NAME);
@@ -1893,7 +1893,8 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
     size_t                          len, len1;
     ngx_rtmp_hls_variant_t         *var;
     ngx_uint_t                      n;
-    u_char                           num[NGX_BUFF_LEN];
+    ngx_str_t                       unique_name;
+    u_char                          num[NGX_BUFF_LEN];
 
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
     if (hacf == NULL || hacf->path.len == 0) {
@@ -1951,8 +1952,8 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
     }
 
     if (ngx_strstr(v->name, "..")) {
-        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
-                      "hls: bad stream name: '%s'", v->name);
+        
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "hls: bad stream name: '%s'", v->name);
         return NGX_ERROR;
     }
 
@@ -2025,36 +2026,55 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
         ngx_memzero(num, NGX_BUFF_LEN);
         *ngx_sprintf(num, "%ui", (ngx_uint_t)s->connection->number) = 0;
 
+#define NGX_RTMP_HLS_MERGE_PATH(p, unique_name, app, sname, time, num) \
+        do {\
+            p = ngx_cpymem(p, unique_name.data, unique_name.len); \
+            *p++ = '/'; \
+            p  = ngx_cpymem(p, app.data, app.len); \
+            *p++ = '/'; \
+            p = ngx_cpymem(p, sname.data, sname.len); \
+            *p++ = '/'; \
+            p = ngx_cpymem(p, time, ngx_strlen(time));  \
+            p = ngx_cpymem(p, "_", ngx_strlen("_"));  \
+            p = ngx_cpymem(p, num, ngx_strlen((char *)num));  \
+            *p++ = '/'; \
+        } while(0)
+
+        unique_name = ngx_rtmp_get_attr_conf(cscf, unique_name);
+        
+        //create vodlist path
         ctx->vodlist.len = hacf->vod_path.len + (hacf->vod_path.data[hacf->vod_path.len - 1] == '/' ? 0 : 1)
-        		+ ngx_rtmp_get_attr_conf(cscf, unique_name).len + 1 + s->app.len + 1 + s->name.len + 1
-        		+ ngx_strlen(ctx->time) + ngx_strlen((char *)num) +1 +1;
+                + ngx_strlen("data/") + unique_name.len + 1 + s->app.len + 1 + s->name.len + 1
+                + ngx_strlen(ctx->time)  +1 + ngx_strlen((char *)num) +1;
 
         ctx->vodlist.data = ngx_palloc(s->pool, ctx->vodlist.len);
         ngx_memzero(ctx->vodlist.data, ctx->vodlist.len);
 
-        // vodlist = /tmp/vod_hls/
+        // vodlist = /tmp/vod_hls/data/
         p1 = ngx_cpymem(ctx->vodlist.data, hacf->vod_path.data, hacf->vod_path.len);
         if (p1[-1] != '/') {
             *p1++ = '/';
         }
+        p1 = ngx_cpymem(p1, "data/", ngx_strlen("data/"));
+        
+        NGX_RTMP_HLS_MERGE_PATH(p1, unique_name, s->app, s->name, ctx->time, num);
 
-        // vodlist = /tmp/vod_hls/test/
-        p1 = ngx_cpymem(p1, ngx_rtmp_get_attr_conf(cscf, unique_name).data, ngx_rtmp_get_attr_conf(cscf, unique_name).len);
-        *p1++ = '/';
+        //create index file path
+        ctx->index_path.len = hacf->vod_path.len + (hacf->vod_path.data[hacf->vod_path.len - 1] == '/' ? 0 : 1)
+                + ngx_strlen("index/") + unique_name.len + 1 + s->app.len + 1 + s->name.len + 1
+                + ngx_strlen(ctx->time) + ngx_strlen((char *)num) +1 +1;
 
-        // vodlist = /tmp/vod_hls/test/app/
-        p1 = ngx_cpymem(p1, s->app.data, s->app.len);
-        *p1++ = '/';
+        ctx->index_path.data = ngx_palloc(s->pool, ctx->index_path.len);
+        ngx_memzero(ctx->index_path.data, ctx->index_path.len);
 
-        // vodlist = /tmp/vod_hls/test/app/sn/
-        p1 = ngx_cpymem(p1, s->name.data, s->name.len);
-        *p1++ = '/';
-
-        // vodlist = /tmp/vod_hls/test/app/sn/systemtime_number/
-        p1 = ngx_cpymem(p1, ctx->time, ngx_strlen(ctx->time));
-        p1 = ngx_cpymem(p1, "_", ngx_strlen("_"));
-        p1 = ngx_cpymem(p1, num, ngx_strlen(num));
-        *p1++ = '/';
+        //index_path = tmp/vod_hls/index/
+        p1 = ngx_cpymem(ctx->index_path.data, hacf->vod_path.data, hacf->vod_path.len);
+        if (p1[-1] != '/') {
+            *p1++ = '/';
+        }
+        p1 = ngx_cpymem(p1, "index/", ngx_strlen("index/"));
+        
+        NGX_RTMP_HLS_MERGE_PATH(p1, unique_name, s->app, s->name, ctx->time, num);
 
 	  // vodlist = /tmp/vod_hls/test/app/sn/systemtime/vdoid-timestamp.ts
         if (s->vdoid.len > 0) {
@@ -2088,7 +2108,8 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
 
             p2 = ngx_cpymem(p2, s->name.data, s->name.len);
         }
-       *ngx_cpymem(p2, ".m3u8.tmp", ngx_strlen(".m3u8.tmp")) = 0;
+
+        *ngx_cpymem(p2, ".m3u8.tmp", ngx_strlen(".m3u8.tmp")) = 0;
         if (s->vdoid.len > 0) {
 
             ctx->vodm3u8tmp.len = ctx->vodlist.len + s->vdoid.len + ngx_strlen("-") + s->name.len + ngx_strlen(".m3u8.tmp");
@@ -2099,7 +2120,7 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
 
         ctx->m3u8_header = 0;
         
-        //generate m3u8.bak file, path = /tmp/vod_hls/test/app/test/time/vdoid-time.m3u8
+        // generate m3u8.bak file, path = /tmp/vod_hls/test/app/test/time/vdoid-time.m3u8
         len1 = ctx->vodlist.len + s->vdoid.len + ngx_strlen("-") + s->name.len + ngx_strlen(".m3u8.bak") + 1;
         ctx->vodm3u8bak.data = ngx_palloc(s->pool, len1);
         ngx_memzero(ctx->vodm3u8bak.data, len1);
@@ -2113,6 +2134,7 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
 
             p2 = ngx_cpymem(p2, s->name.data, s->name.len);
         }
+
         *ngx_cpymem(p2, ".m3u8.bak", ngx_strlen(".m3u8.bak")) =0;
         if (s->vdoid.len > 0) {
 
@@ -2125,9 +2147,20 @@ ngx_rtmp_hls_publish(ngx_rtmp_session_t *s, ngx_rtmp_publish_t *v)
         ctx->vodm3u8.len = ctx->vodm3u8tmp.len - ngx_strlen(".tmp");
         ctx->vodm3u8.data = ngx_palloc(s->pool, ctx->vodm3u8.len + 1);
 	    *ngx_cpymem(ctx->vodm3u8.data, ctx->vodm3u8tmp.data, ctx->vodm3u8.len) = 0;
-        if (ngx_rtmp_hls_create_indexdir(s) == NGX_OK) {
 
-            ngx_rtmp_hls_init_indexfile(s, &ctx->vodlist);
+        if (ngx_rtmp_hls_create_dir(s, &ctx->vodlist) ==  NGX_ERROR) {
+            
+            ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
+                "create hls vod dir failed, unique_name:%V, app:%V, name:%V", &unique_name, &s->app, &s->name);
+        }
+
+        if (ngx_rtmp_hls_create_dir(s, &ctx->index_path) == NGX_OK) {
+
+            ngx_rtmp_hls_init_indexfile(s, &ctx->index_path);
+        } else {
+        
+            ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
+                "create hls vod index dir failed, unique_name:%V, app:%V, name:%V", &unique_name, &s->app, &s->name);
         }
     }
 
@@ -2204,12 +2237,12 @@ next:
 
 
 static ngx_int_t
-ngx_rtmp_hls_create_indexdir(ngx_rtmp_session_t *s)
+ngx_rtmp_hls_create_dir(ngx_rtmp_session_t *s, ngx_str_t *path)
 {
     ngx_rtmp_hls_app_conf_t        *hacf;
     ngx_rtmp_hls_ctx_t             *ctx;
     ngx_file_info_t                 fi;
-    u_char                          path[NGX_MAX_PATH + 1];
+    u_char                          tmp_path[NGX_MAX_PATH + 1];
 
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
     if (hacf == NULL) {
@@ -2220,12 +2253,11 @@ ngx_rtmp_hls_create_indexdir(ngx_rtmp_session_t *s)
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
     if (ctx == NULL) {
 
-    	return 	NGX_ERROR;
+    	return NGX_ERROR;
     }
 
-    *ngx_cpymem(path, ctx->vodlist.data, ctx->vodlist.len) = 0;
-
-    if (ngx_file_info(path, &fi) == NGX_FILE_ERROR) {
+    *ngx_cpymem(tmp_path, path->data, path->len) = 0;
+    if (ngx_file_info(tmp_path, &fi) == NGX_FILE_ERROR) {
 
         if (ngx_errno != NGX_ENOENT) {
 
@@ -2233,7 +2265,7 @@ ngx_rtmp_hls_create_indexdir(ngx_rtmp_session_t *s)
         }
 
         /* ENOENT */
-        if (ngx_create_full_path(path, NGX_RTMP_HLS_DIR_ACCESS) == NGX_FILE_ERROR) {
+        if (ngx_create_full_path(tmp_path, NGX_RTMP_HLS_DIR_ACCESS) == NGX_FILE_ERROR) {
 
             return NGX_ERROR;
         }
@@ -2242,11 +2274,11 @@ ngx_rtmp_hls_create_indexdir(ngx_rtmp_session_t *s)
 
         if (!ngx_is_dir(&fi)) {
 
-            return  NGX_ERROR;
+            return NGX_ERROR;
         }
     }
 
-	return NGX_OK;
+    return NGX_OK;
 }
 
 
@@ -2394,16 +2426,16 @@ next:
 static ngx_int_t
 ngx_rtmp_hls_open_file(ngx_http_request_t *r, ngx_chain_t *out)
 {
-	u_char					  *last;
-	off_t					   start, len;
-	size_t					   root;
-	ngx_int_t				   rc;
-	ngx_uint_t				   level;
-	ngx_str_t				   path;
-	ngx_log_t				  *log;
-	ngx_buf_t				  *b;
-	ngx_open_file_info_t	   of;
-	ngx_http_core_loc_conf_t  *clcf;
+	u_char                     *last;
+	off_t                       start, len;
+	size_t                      root;
+	ngx_int_t                   rc;
+	ngx_uint_t                  level;
+	ngx_str_t                   path;
+	ngx_log_t                  *log;
+	ngx_buf_t                  *b;
+	ngx_open_file_info_t        of;
+	ngx_http_core_loc_conf_t   *clcf;
 
 	last = ngx_http_map_uri_to_path(r, &path, &root, 0);
 	if (last == NULL) {
@@ -2731,12 +2763,12 @@ ngx_rtmp_hls_update_fragment(ngx_rtmp_session_t *s, uint64_t ts,
             break;
     }
 
-	if (boundary || force) {
+    if (boundary || force) {
 
         ngx_rtmp_hls_close_fragment(s, ts);
         ngx_rtmp_hls_open_fragment(s, ts, discont);
-		ctx->gen_ts = 1;
-	}
+        ctx->gen_ts = 1;
+    }
 
     b = ctx->aframe;
     if (ctx->opened && b && b->last > b->pos &&
@@ -2751,14 +2783,14 @@ ngx_rtmp_hls_update_fragment(ngx_rtmp_session_t *s, uint64_t ts,
 static ngx_int_t
 ngx_rtmp_hls_flush_audio(ngx_rtmp_session_t *s)
 {
-    ngx_rtmp_hls_ctx_t             *ctx;
-    ngx_rtmp_mpegts_frame_t         frame;
-    ngx_int_t                       rc;
-    ngx_buf_t                      *b;
-	ngx_rtmp_hls_app_conf_t        *hacf;
+    ngx_rtmp_hls_ctx_t              *ctx;
+    ngx_rtmp_mpegts_frame_t          frame;
+    ngx_int_t                        rc;
+    ngx_buf_t                       *b;
+    ngx_rtmp_hls_app_conf_t         *hacf;
 
-    static u_char                   ts_buffer[NGX_RTMP_HLS_BUFSIZE];
-    ngx_uint_t                      ts_size;
+    static u_char                    ts_buffer[NGX_RTMP_HLS_BUFSIZE];
+    ngx_uint_t                       ts_size;
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
 
@@ -2766,10 +2798,10 @@ ngx_rtmp_hls_flush_audio(ngx_rtmp_session_t *s)
         return NGX_OK;
     }
 	
-	hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
-	if (hacf == NULL) {
-		return NGX_OK;
-	}
+    hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
+    if (hacf == NULL) {
+        return NGX_OK;
+    }
 
     b = ctx->aframe;
 
@@ -2795,12 +2827,12 @@ ngx_rtmp_hls_flush_audio(ngx_rtmp_session_t *s)
         ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
                       "hls: audio flush failed");
     } else {
-		rc = ngx_write_file(&ctx->file, ts_buffer, ts_size, ctx->file.offset);
-		if (ngx_rtmp_get_attr_conf(hacf, hls_vod)  && (s->relay_type == NGX_NONE_RELAY)) {
+        rc = ngx_write_file(&ctx->file, ts_buffer, ts_size, ctx->file.offset);
+        if (ngx_rtmp_get_attr_conf(hacf, hls_vod)  && (s->relay_type == NGX_NONE_RELAY)) {
 
-			rc = ngx_write_file(&ctx->vodfile, ts_buffer, ts_size, ctx->vodfile.offset);
-		}
-	}
+        	rc = ngx_write_file(&ctx->vodfile, ts_buffer, ts_size, ctx->vodfile.offset);
+        }
+    }
 
     ctx->audio_cc = frame.cc;
     b->pos = b->last = b->start;
@@ -3243,15 +3275,15 @@ ngx_rtmp_hls_stream_eof(ngx_rtmp_session_t *s, ngx_rtmp_stream_eof_t *v)
 static ngx_int_t
 ngx_rtmp_hls_cleanup_dir(ngx_str_t *ppath)
 {
-    ngx_dir_t               dir;
-    time_t                  mtime, max_age;
-    ngx_err_t               err;
-    ngx_str_t               name, spath;
-    u_char                 *p;
-    ngx_int_t               nentries, nerased, fact;
-    u_char                  path[NGX_MAX_PATH + 1];
-    ngx_msec_t              expire;
-    ngx_flag_t              read;
+    ngx_dir_t                dir;
+    time_t                   mtime, max_age;
+    ngx_err_t                err;
+    ngx_str_t                name, spath;
+    u_char                  *p;
+    ngx_int_t                nentries, nerased, fact;
+    u_char                   path[NGX_MAX_PATH + 1];
+    ngx_msec_t               expire;
+    ngx_flag_t               read;
  
     ngx_log_debug1(NGX_LOG_DEBUG_RTMP, ngx_cycle->log, 0,
                    "hls: cleanup path='%V'",
@@ -3313,7 +3345,6 @@ ngx_rtmp_hls_cleanup_dir(ngx_str_t *ppath)
             ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, ngx_errno,
                           "hls: cleanup " ngx_de_info_n " \"%V\" failed",
                           &spath);
-
             continue;
         }
 
@@ -3327,9 +3358,7 @@ ngx_rtmp_hls_cleanup_dir(ngx_str_t *ppath)
                  * null-termination gets spoiled in win32
                  * version of ngx_open_dir
                  */
-
                 *p = 0;
-
                 if (ngx_delete_dir(path) == NGX_FILE_ERROR) {
                     ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, ngx_errno,
                                   "hls: cleanup " ngx_delete_dir_n
@@ -3402,7 +3431,6 @@ ngx_rtmp_hls_cleanup_dir(ngx_str_t *ppath)
 	    }
 
         max_age = expire / fact;
-
         mtime = ngx_de_mtime(&dir);
         if (mtime + max_age > ngx_cached_time->sec) {
             continue;
@@ -3439,7 +3467,6 @@ static char *
 ngx_rtmp_hls_variant(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
     ngx_rtmp_hls_app_conf_t  *hacf = conf;
-
     ngx_str_t                *value, *arg;
     ngx_uint_t                n;
     ngx_rtmp_hls_variant_t   *var;
@@ -3732,6 +3759,10 @@ ngx_rtmp_http_hls_init_session(ngx_http_request_t *r, ngx_rtmp_addr_conf_t *addr
         ngx_rtmp_finalize_session(s);
         return NULL;
     }
+    
+#if (nginx_version >= 1007005)
+    ngx_queue_init(&s->posted_dry_events);
+#endif
 
     s->epoch = ngx_current_msec;
     s->timeout = cscf->timeout;
@@ -3881,6 +3912,7 @@ ngx_rtmp_hls_proxy_create(ngx_rtmp_session_t *s, void *arg,
     ngx_http_request_t             *r;
     ngx_str_t                       args, vhost;
     u_char                         *colon;
+    ngx_int_t                       family = AF_INET;
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
     if (ctx == NULL) {
@@ -3916,7 +3948,7 @@ ngx_rtmp_hls_proxy_create(ngx_rtmp_session_t *s, void *arg,
         b->last = ngx_cpymem(b->last, r->args.data, r->args.len);
     }
 
-    return ngx_rtmp_netcall_http_format_request(NGX_RTMP_NETCALL_HTTP_GET, &vhost,
+    return ngx_rtmp_netcall_http_format_request(NGX_RTMP_NETCALL_HTTP_GET, &vhost, family,
                                                 &r->uri, &args, al, NULL, pool,
                                                 &ngx_rtmp_hls_urlencoded);
 }
@@ -3990,7 +4022,7 @@ ngx_rtmp_http_hls_change_uri(ngx_http_request_t *r, ngx_str_t unique_name,
 
 	p = uri.data;
 
-    *p++ = '/';
+      *p++ = '/';
 	p = ngx_cpymem(p, unique_name.data, unique_name.len);
 
 	p = ngx_cpymem(p, r->uri.data, r->uri.len);
@@ -4007,7 +4039,7 @@ ngx_int_t
 ngx_rtmp_http_hls_build_url(ngx_rtmp_session_t *s, ngx_str_t *remote_ip, ngx_int_t remote_port)
 {
     ngx_http_request_t       *r;
-    u_char                          strport[32];
+    u_char                    strport[32];
     ngx_rtmp_hls_ctx_t       *ctx;
 
     r = s->r;
@@ -4316,7 +4348,8 @@ ngx_rtmp_http_hls_handler(ngx_http_request_t *r)
         return NGX_CUSTOME;
     }
 
-    if (!(r->method & (NGX_HTTP_GET|NGX_HTTP_HEAD))) {
+    if (!(r->method & (NGX_HTTP_GET|NGX_HTTP_HEAD))
+        || r->headers_in.host == NULL) {
         return NGX_HTTP_NOT_ALLOWED;
     }
 
@@ -4398,7 +4431,7 @@ ngx_rtmp_http_hls_create_conf(ngx_conf_t *cf)
         return NULL;
     }
 
-	hlcf->hls = NGX_CONF_UNSET;
+    hlcf->hls = NGX_CONF_UNSET;
 
     return hlcf;
 }
@@ -4407,10 +4440,10 @@ ngx_rtmp_http_hls_create_conf(ngx_conf_t *cf)
 static char *
 ngx_rtmp_http_hls_merge_conf(ngx_conf_t *cf, void *parent, void *child)
 {
-	ngx_rtmp_http_hls_loc_conf_t *prev = parent;
+    ngx_rtmp_http_hls_loc_conf_t *prev = parent;
     ngx_rtmp_http_hls_loc_conf_t *conf = child;
 
-	ngx_conf_merge_value(conf->hls, prev->hls, 0);
+    ngx_conf_merge_value(conf->hls, prev->hls, 0);
 
     return NGX_CONF_OK;
 }

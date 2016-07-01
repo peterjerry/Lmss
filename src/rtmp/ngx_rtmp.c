@@ -55,8 +55,12 @@ static ngx_chain_t* ngx_rtmp_time_update_gen_http_request(ngx_peer_connection_t*
 static void ngx_rtmp_time_update_read_event_handler(ngx_event_t* rev);
 static void ngx_rtmp_time_update_write_event_handler(ngx_event_t *wev);
 static void ngx_rtmp_time_update(ngx_resolver_ctx_t* ctx); 
+static ngx_int_t ngx_rtmp_init_process(ngx_cycle_t *cycle);
 
-#if (nginx_version >= 1007005)
+
+#if (nginx_version >= 1007011)
+ngx_queue_t                         ngx_rtmp_init_queue;
+#elif (nginx_version >= 1007005)
 ngx_thread_volatile ngx_queue_t     ngx_rtmp_init_queue;
 #else
 ngx_thread_volatile ngx_event_t    *ngx_rtmp_init_queue;
@@ -93,7 +97,7 @@ ngx_module_t  ngx_rtmp_module = {
     NGX_CORE_MODULE,                       /* module type */
     NULL,                                  /* init master */
     NULL,                                  /* init module */
-    NULL,                                  /* init process */
+    ngx_rtmp_init_process,                 /* init process */
     NULL,                                  /* init thread */
     NULL,                                  /* exit thread */
     NULL,                                  /* exit process */
@@ -1469,7 +1473,7 @@ ngx_rtmp_init_listening(ngx_conf_t *cf, ngx_rtmp_conf_port_t *port)
 	            return NGX_ERROR;
 	        }
 
-			if (ngx_rtmp_add_addrs(cf, pport, addr) != NGX_OK) {
+			if(ngx_rtmp_add_addrs(cf, pport, addr) != NGX_OK){
 	            return NGX_ERROR;
 	        }
 	        break;
@@ -1509,6 +1513,10 @@ ngx_rtmp_add_listening(ngx_conf_t *cf, ngx_rtmp_conf_addr_t *addr)
 
 #if (NGX_HAVE_INET6 && defined IPV6_V6ONLY)
     ls->ipv6only = addr.ipv6only;
+#endif
+
+#if (NGX_HAVE_REUSEPORT)
+    ls->reuseport = addr->opt.reuseport;
 #endif
 
     return ls;
@@ -1721,6 +1729,10 @@ ngx_rtmp_time_update_timer(ngx_event_t *ev)
     if (cmcf == NULL) {
         ngx_log_error(NGX_LOG_ERR, ev->log, 0,
                 "ngx_rtmp_core_main_conf is null");
+        return;
+    }
+
+    if(cmcf->time_server_url.url.len == 0) {
         return;
     }
 
@@ -2014,7 +2026,7 @@ ngx_rtmp_time_update_handle_http_response(ngx_rtmp_core_main_conf_t *cmcf,
         ngx_connection_t* c)
 {
     ngx_chain_t            *in;
-    ngx_uint_t              content_length, pos;
+    ngx_uint_t              content_length;
     u_char                 *content, ret;
     ngx_int_t               server_time, rc;
     ngx_str_t               content_str;
@@ -2048,32 +2060,42 @@ ngx_rtmp_time_update_handle_http_response(ngx_rtmp_core_main_conf_t *cmcf,
                 content_length, pc->name);
         return;
     }
-    //update time
-    for (pos = 0; pos < content_length; pos++) {
-        if (content[pos] == '.') {
-            break;
-        }
+    content_str.data = content;
+    content_str.len = content_length;
+    /*skip illegel char*/
+    for (; content && content_length > 0
+            && (*content < '0' || *content > '9');
+            content++, content_length--) {
     }
 
-    for (; content && (*content < '0' || *content > '9'); content++, content_length--) {
-    }
-
-    for(; content && (content[content_length-1] < '0' || content[content_length-1] > '9'); content_length--) {
+    for(; content && content_length > 0
+            && (content[content_length-1] < '0' || content[content_length-1] > '9');
+            content_length--) {
     }
 
     server_time = ngx_atofp(content, content_length, 6);//us
     if (server_time == NGX_ERROR) {
-        content_str.data = content;
-        content_str.len = content_length;
         ngx_log_error(NGX_LOG_ERR, c->log, 0,
                 "utc time format from server is illegal, content: %V, len: %i, server: %V",
-                &content_str, content_length, pc->name);
+                &content_str, content_str.len, pc->name);
         return;
     }
     server_time = (server_time + 500) / 1000;//ms
     ngx_log_error(NGX_LOG_INFO, c->log, 0, 
-            "receive utc time: %i, diff: %i, server: %V", server_time, ngx_current_msec - cmcf->cur_time_update, pc->name);
+            "receive utc time: %ui, recv delay: %i, diff: %i, content: %V,  server: %V",
+            server_time, ngx_current_msec - cmcf->cur_time_update,
+            server_time - ngx_current_msec, &content_str,  pc->name);
     cmcf->last_time_update = ngx_current_msec;
     cmcf->cur_utc_time = server_time + (cmcf->last_time_update - cmcf->cur_time_update)/2;
     cmcf->cur_time_update = 0;
 }
+
+static ngx_int_t
+ngx_rtmp_init_process(ngx_cycle_t *cycle)
+{
+#if (nginx_version >= 1007005)
+    ngx_queue_init(&ngx_rtmp_init_queue);
+#endif
+    return NGX_OK;
+}
+

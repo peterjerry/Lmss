@@ -402,6 +402,10 @@ ngx_rtmp_http_hdl_init_session(ngx_http_request_t *r, ngx_rtmp_addr_conf_t *addr
         ngx_rtmp_finalize_session(s);
         return NULL;
     }
+    
+#if (nginx_version >= 1007005)
+    ngx_queue_init(&s->posted_dry_events);
+#endif
 
 	s->epoch = ngx_current_msec;
 	s->timeout = cscf->timeout;
@@ -571,7 +575,8 @@ ngx_rtmp_http_hdl_handler(ngx_http_request_t *r)
         return NGX_CUSTOME;
     }
 
-    if (!(r->method & (NGX_HTTP_GET|NGX_HTTP_HEAD))) {
+    if (!(r->method & (NGX_HTTP_GET|NGX_HTTP_HEAD))
+        || r->headers_in.host == NULL) {
         return NGX_HTTP_NOT_ALLOWED;
     }
 
@@ -1211,12 +1216,12 @@ ngx_rtmp_hdl_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
             cs->dropped = 0;
         }
 
-        /* send combine header */
-        ngx_rtmp_hdl_send_combine_header(s, ss, lh);
-
         /* absolute packet */
 
         if (!cs->active) {
+
+            /* send combine header */
+            ngx_rtmp_hdl_send_combine_header(s, ss, lh);
 
             if (mandatory) {
                 ngx_log_debug0(NGX_LOG_DEBUG_RTMP, ss->connection->log, 0,

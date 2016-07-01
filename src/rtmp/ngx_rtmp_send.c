@@ -96,7 +96,7 @@ ngx_rtmp_create_chunk_size(ngx_rtmp_session_t *s, uint32_t chunk_size)
                    "chunk_size=%uD", chunk_size);
 
     s->log_bpos = s->log_buf;
-    *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d chunk_size:%uD",
+    *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"chunk_size:%uD",
             NGX_RTMP_MSG_CHUNK_SIZE, chunk_size) = 0;
 
     {
@@ -124,7 +124,7 @@ ngx_rtmp_create_abort(ngx_rtmp_session_t *s, uint32_t csid)
                    "create: abort csid=%uD", csid);
 
     s->log_bpos = s->log_buf;
-    *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d", NGX_RTMP_MSG_ABORT) = 0;
+    *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d", NGX_RTMP_MSG_ABORT) = 0;
 
     {
         NGX_RTMP_USER_START(s, NGX_RTMP_MSG_ABORT);
@@ -151,7 +151,7 @@ ngx_rtmp_create_ack(ngx_rtmp_session_t *s, uint32_t seq)
                    "create: ack seq=%uD", seq);
 
     s->log_bpos = s->log_buf;
-    *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d ack_seq:%uD",
+    *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"ack_seq:%uD",
             NGX_RTMP_MSG_ACK, seq) = 0;
 
     {
@@ -179,7 +179,7 @@ ngx_rtmp_create_ack_size(ngx_rtmp_session_t *s, uint32_t ack_size)
                    "create: ack_size=%uD", ack_size);
 
     s->log_bpos = s->log_buf;
-    *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d ack_size:%uD",
+    *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"ack_size:%uD",
             NGX_RTMP_MSG_ACK_SIZE, ack_size) = 0;
 
     {
@@ -209,7 +209,7 @@ ngx_rtmp_create_bandwidth(ngx_rtmp_session_t *s, uint32_t ack_size,
                    ack_size, (int)limit_type);
 
     s->log_bpos = s->log_buf;
-    *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d bandwidth:%uD limit:%d",
+    *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"bandwidth:%uD"BLANK_SPACE"limit:%d",
             NGX_RTMP_MSG_BANDWIDTH, ack_size, (int)limit_type) = 0;
 
     {
@@ -241,7 +241,7 @@ ngx_rtmp_create_stream_begin(ngx_rtmp_session_t *s, uint32_t msid)
                    "create: stream_begin msid=%uD", msid);
 
     s->log_bpos = s->log_buf;
-    *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d rtmp_user_msg_type:%d msid:%uD",
+    *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"rtmp_user_msg_type:%d"BLANK_SPACE"msid:%uD",
             NGX_RTMP_MSG_USER, NGX_RTMP_USER_STREAM_BEGIN, msid) = 0;
 
     {
@@ -270,7 +270,7 @@ ngx_rtmp_create_stream_eof(ngx_rtmp_session_t *s, uint32_t msid)
                    "create: stream_end msid=%uD", msid);
 
     s->log_bpos = s->log_buf;
-    *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d rtmp_user_msg_type:%d msid:%uD",
+    *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"rtmp_user_msg_type:%d"BLANK_SPACE"msid:%uD",
             NGX_RTMP_MSG_USER, NGX_RTMP_USER_STREAM_EOF, msid) = 0;
 
     {
@@ -298,7 +298,7 @@ ngx_rtmp_create_stream_dry(ngx_rtmp_session_t *s, uint32_t msid)
                    "create: stream_dry msid=%uD", msid);
 
     s->log_bpos = s->log_buf;
-    *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d rtmp_user_msg_type:%d msid:%uD",
+    *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"rtmp_user_msg_type:%d"BLANK_SPACE"msid:%uD",
             NGX_RTMP_MSG_USER, NGX_RTMP_USER_STREAM_DRY, msid) = 0;
 
     {
@@ -328,8 +328,7 @@ ngx_rtmp_create_set_buflen(ngx_rtmp_session_t *s, uint32_t msid,
                    msid, buflen_msec);
 
     s->log_bpos = s->log_buf;
-    *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d rtmp_user_msg_type:%d msid:%uD buflen:%uD",
-            NGX_RTMP_MSG_USER, NGX_RTMP_USER_SET_BUFLEN, msid, buflen_msec) = 0;
+    *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"rtmp_user_msg_type:%d"BLANK_SPACE"msid:%uD"BLANK_SPACE"buflen:%uD", NGX_RTMP_MSG_USER, NGX_RTMP_USER_SET_BUFLEN, msid, buflen_msec) = 0;
 
     {
         NGX_RTMP_UCTL_START(s, NGX_RTMP_MSG_USER, NGX_RTMP_USER_SET_BUFLEN);
@@ -358,7 +357,7 @@ ngx_rtmp_create_recorded(ngx_rtmp_session_t *s, uint32_t msid)
                    "create: recorded msid=%uD", msid);
 
     s->log_bpos = s->log_buf;
-    *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d rtmp_user_msg_type:%d msid:%uD",
+    *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"rtmp_user_msg_type:%d"BLANK_SPACE"msid:%uD",
             NGX_RTMP_MSG_USER, NGX_RTMP_USER_RECORDED, msid) = 0;
 
     {
@@ -386,7 +385,7 @@ ngx_rtmp_create_ping_request(ngx_rtmp_session_t *s, uint32_t timestamp)
                    "create: ping_request timestamp=%uD", timestamp);
 
     s->log_bpos = s->log_buf;
-    *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d rtmp_user_msg_type:%d timestamp:%uD",
+    *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"rtmp_user_msg_type:%d"BLANK_SPACE"timestamp:%uD",
             NGX_RTMP_MSG_USER, NGX_RTMP_USER_PING_REQUEST, timestamp) = 0;
 
     {
@@ -414,7 +413,7 @@ ngx_rtmp_create_ping_response(ngx_rtmp_session_t *s, uint32_t timestamp)
                    "create: ping_response timestamp=%uD", timestamp);
 
     s->log_bpos = s->log_buf;
-    *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d rtmp_user_msg_type:%d timestamp:%uD",
+    *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"rtmp_user_msg_type:%d"BLANK_SPACE"timestamp:%uD",
             NGX_RTMP_MSG_USER, NGX_RTMP_USER_PING_RESPONSE, timestamp) = 0;
 
     {
@@ -497,7 +496,7 @@ ngx_rtmp_create_amf(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     if (nelts > 0) {
 
         s->log_bpos = s->log_buf;
-        *ngx_sprintf(s->log_bpos, " rtmp_msg_type:%d amf_msg_name:%s", 
+        *ngx_sprintf(s->log_bpos, BLANK_SPACE"rtmp_msg_type:%d"BLANK_SPACE"amf_msg_name:%s", 
             h->type, (u_char *)elts[0].data) = 0;
     }
 

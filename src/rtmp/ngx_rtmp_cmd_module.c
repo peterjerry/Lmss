@@ -178,6 +178,7 @@ ngx_rtmp_cmd_connect_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     }
 
     len = ngx_strlen(v.app);
+    
     if (len > 10 && !ngx_memcmp(v.app + len - 10, "/_definst_", 10)) {
         v.app[len - 10] = 0;
     } else if (len && v.app[len - 1] == '/') {
@@ -204,6 +205,20 @@ ngx_rtmp_cmd_connect_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     s->acodecs = (uint32_t) v.acodecs;
     s->vcodecs = (uint32_t) v.vcodecs;
     s->relay_type = v.relay_type;
+
+    if (s->app.len > NGX_RTMP_MAX_NAME_LEN) {
+
+        s->finalize_code = NGX_RTMP_LOG_FINALIZE_CONNECT_APP_NAME_ILLEGAL;
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "error: app name len is bigger 128 bytes");
+        return NGX_ERROR;
+    }
+    
+    if (ngx_rtmp_string_check(&s->app) == NGX_ERROR) {
+        
+        s->finalize_code = NGX_RTMP_LOG_FINALIZE_CONNECT_APP_NAME_ILLEGAL;
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "error: app name contains illegal char, app name is:%s",v.app);
+        return NGX_ERROR;
+    }
 
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
             "slot=%i, connect: app='%s' args='%s' flashver='%s' swf_url='%s' "
@@ -531,6 +546,21 @@ ngx_rtmp_cmd_publish_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
         ngx_snprintf(s->args.data, s->args.len, "%V&%s", &args, v.args);
     }
+    
+    if (s->name.len > NGX_RTMP_MAX_NAME_LEN) {
+        
+        s->finalize_code = NGX_RTMP_LOG_FINALIZE_PUBLISH_STREAM_NAME_ILLEGAL;
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "error: publish stream name len is bigger than 128, name is:%V", &s->name);
+        return NGX_ERROR;
+    }
+    
+    //check app wether contains illegal char
+    if (ngx_rtmp_string_check(&s->name) == NGX_ERROR) {
+
+        s->finalize_code = NGX_RTMP_LOG_FINALIZE_PUBLISH_STREAM_NAME_ILLEGAL;
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "error: publish stream name contains illegal char, name is:%V", &s->name);
+        return NGX_ERROR;
+    }
 
     ngx_rtmp_arg(s->args, (u_char *)"vdoid", 5, &s->vdoid);
     ngx_rtmp_arg(s->args, (u_char *)"preset", 6, &s->preset);
@@ -645,7 +675,7 @@ ngx_rtmp_cmd_play_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     {
         return NGX_ERROR;
     }
-
+    
     ngx_rtmp_cmd_fill_args(v.name, v.args);
 
     NGX_RTMP_SET_STRPAR(name);
@@ -660,6 +690,19 @@ ngx_rtmp_cmd_play_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         s->args.data = ngx_palloc(s->pool, s->args.len);
 
         ngx_snprintf(s->args.data, s->args.len, "%V&%s", &args, v.args);
+    }
+
+    if (s->name.len > NGX_RTMP_MAX_NAME_LEN) {
+
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "error: play stream name len is bigger than 128, name is:%V", &s->name);
+        return NGX_ERROR;
+    }   
+     
+    //check app wether contains illegal char
+    if (ngx_rtmp_string_check(&s->name) == NGX_ERROR) {
+
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "error: stream name contains illegal char, name is:%V", &s->name);
+        return NGX_ERROR;
     }
 
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,

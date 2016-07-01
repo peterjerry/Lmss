@@ -207,6 +207,10 @@ ngx_rtmp_init_session(ngx_connection_t *c, ngx_rtmp_addr_conf_t *addr_conf)
         ngx_rtmp_close_connection(c);
         return NULL;
     }
+    
+#if (nginx_version >= 1007005)
+        ngx_queue_init(&s->posted_dry_events);
+#endif
 
     s->epoch = ngx_current_msec;
     s->last_time = s->epoch;
@@ -223,6 +227,9 @@ ngx_rtmp_init_session(ngx_connection_t *c, ngx_rtmp_addr_conf_t *addr_conf)
     s->connect_time = ngx_time();  // record the start time
 	s->is_drm 		= NGX_RTMP_STREAM_NDRM;
 	s->is_public	= NGX_RTMP_STREAM_PRIVATE;
+
+	/** init finalize code **/
+	s->finalize_code = NGX_RTMP_LOG_FINALIZE_CLIENT_CLOSE_SESSION_CODE;
 
     return s;
 }
@@ -285,6 +292,7 @@ ngx_rtmp_close_session_handler(ngx_event_t *e)
 {
     ngx_rtmp_session_t                 *s;
     ngx_connection_t                   *c;
+    ngx_http_request_t                 *r;
     ngx_rtmp_core_srv_conf_t           *cscf;
 
     s = e->data;
@@ -293,6 +301,12 @@ ngx_rtmp_close_session_handler(ngx_event_t *e)
     cscf = ngx_rtmp_get_module_srv_conf(s, ngx_rtmp_core_module);
 
     ngx_log_error(NGX_LOG_INFO, c->log, 0, "close session");
+
+    if (!ngx_rtmp_type(s->protocol)) {
+        r = s->r;
+        ngx_http_finalize_request(r, s->rc);
+        return;
+    }
 
     ngx_rtmp_fire_event(s, NGX_RTMP_DISCONNECT, NULL, NULL);
 
@@ -324,7 +338,6 @@ ngx_rtmp_finalize_session(ngx_rtmp_session_t *s)
 {
     ngx_event_t        *e;
     ngx_connection_t   *c;
-    ngx_http_request_t *r;
 
     c = s->connection;
     if (c->destroyed) {
@@ -333,20 +346,12 @@ ngx_rtmp_finalize_session(ngx_rtmp_session_t *s)
 
     ngx_log_error(NGX_LOG_INFO, c->log, 0, "rtmp finalize session");
 
-    if (ngx_rtmp_type(s->protocol)) {
+    c->destroyed = 1;
+    e = &s->close;
+    e->data = s;
+    e->handler = ngx_rtmp_close_session_handler;
+    e->log = c->log;
 
-        c->destroyed = 1;
-        e = &s->close;
-        e->data = s;
-        e->handler = ngx_rtmp_close_session_handler;
-        e->log = c->log;
-
-        ngx_post_event(e, &ngx_posted_events);
-    } else {
-
-        r = s->r;
-        // r->blocked = 0;
-        ngx_http_finalize_request(r, s->rc);
-    }
+    ngx_post_event(e, &ngx_posted_events);
 }
 

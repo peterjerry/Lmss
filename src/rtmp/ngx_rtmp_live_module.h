@@ -46,6 +46,15 @@ struct ngx_rtmp_live_gop_cache_s {
     ngx_rtmp_live_gop_cache_t          *next;
 };
 
+
+typedef struct {
+    uint32_t                            pre_dts;
+    ngx_uint_t                          real_frame_rate;
+    time_t                              time_end;
+    uint64_t                            intl_frame;
+} ngx_rtmp_real_frame_rate_t;
+
+
 struct ngx_rtmp_live_ctx_s {
     ngx_rtmp_session_t                 *session;
     ngx_rtmp_live_dyn_srv_t            *srv;
@@ -83,6 +92,7 @@ struct ngx_rtmp_live_stream_s {
     ngx_rtmp_bandwidth_t                bw_out;
     ngx_rtmp_bandwidth_t                bw_billing_in;
     ngx_rtmp_bandwidth_t                bw_billing_out;
+    ngx_rtmp_real_frame_rate_t          frame_rate;
     ngx_msec_t                          epoch;
     ngx_event_t                         check_evt;
     ngx_msec_t                          check_evt_msec;

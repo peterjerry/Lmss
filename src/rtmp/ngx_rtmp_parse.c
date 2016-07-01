@@ -153,11 +153,10 @@ ngx_rtmp_parse_http_body(ngx_pool_t *pool, ngx_log_t *log, ngx_chain_t* in,
         }
         if (b->pos == b->last) {
             in = in->next;
-            b = in->buf;
         }
     }
     
-    if (b->pos == b->last) {
+    if (b->pos == b->last && in) {
         in = in->next;
     }
 

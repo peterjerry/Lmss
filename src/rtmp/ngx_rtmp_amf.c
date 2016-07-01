@@ -708,7 +708,7 @@ ngx_rtmp_amf_read_object_ex(ngx_rtmp_amf_ctx_t *ctx,
 
         ngx_rtmp_amf_reverse_copy(&len, buf, 2);
 
-        if (len <= 0) {
+        if (len == 0) {
             break;
         }
 
@@ -894,19 +894,27 @@ ngx_rtmp_amf_read_ex(ngx_rtmp_amf_ctx_t *ctx,
 
                 ngx_rtmp_amf_reverse_copy(&len, buf, 2);
 
-                if (len <= 0) {
-                    return NGX_ERROR;
-                }
-
-                if (!data) {
+                if (NULL == data) {/*save unknown*/
                     elt_ex = ngx_rtmp_amf_alloc(ctx->pool, type, len);
                     if(elt_ex == NULL) {
                         return NGX_ERROR;
                     }
                     data = elt_ex->data;
+                    rc = ngx_rtmp_amf_get(ctx, data, len);
+
+                } else if (elts->len <= len) {/*cut off*/
+                    rc = ngx_rtmp_amf_get(ctx, data, elts->len - 1);
+                    if (rc != NGX_OK)
+                        return NGX_ERROR;
+                    ((char*)data)[elts->len - 1] = 0;
+                    rc = ngx_rtmp_amf_get(ctx, NULL, len - elts->len + 1);
+
+                } else {/*normal*/
+                    rc = ngx_rtmp_amf_get(ctx, data, len);
+                    ((char*)data)[len] = 0;
                 }
-                
-                if (ngx_rtmp_amf_get(ctx, data, len) != NGX_OK) {
+
+                if (rc != NGX_OK) {
                     goto fail;
                 }
                 

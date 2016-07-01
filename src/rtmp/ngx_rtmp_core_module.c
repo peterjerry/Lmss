@@ -59,7 +59,7 @@ static ngx_command_t  ngx_rtmp_core_commands[] = {
         NULL },
 
     { ngx_string("listen"),
-        NGX_RTMP_SRV_CONF|NGX_CONF_TAKE12,
+        NGX_RTMP_SRV_CONF|NGX_CONF_TAKE123,
         ngx_rtmp_core_listen,
         NGX_RTMP_SRV_CONF_OFFSET,
         0,
@@ -850,6 +850,18 @@ ngx_rtmp_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
                     "on this platform");
             return NGX_CONF_ERROR;
 #endif
+        }
+        
+        if (ngx_strcmp(value[i].data, "reuseport") == 0) {
+#if (NGX_HAVE_REUSEPORT)
+            lsopt->reuseport = 1;
+            lsopt->bind = 1;
+#else
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "reuseport is not supported "
+                           "on this platform, ignored");
+#endif
+            continue;
         }
 
         if (ngx_strncmp(value[i].data, "so_keepalive=", 13) == 0) {

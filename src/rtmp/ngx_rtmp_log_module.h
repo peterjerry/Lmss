@@ -12,17 +12,17 @@
 #include "ngx_rtmp_live_module.h"
 
 
-#define NGX_RTMP_LOG_EVENT_NOTIFY_LATENCY 0
-#define NGX_RTMP_LOG_EVENT_BW_IN          1
-#define NGX_RTMP_LOG_EVENT_BW_OUT         2
-#define NGX_RTMP_LOG_EVENT_EVT_IN         3
-#define NGX_RTMP_LOG_EVENT_EVT_RTMP_OUT   4
-#define NGX_RTMP_LOG_EVENT_EVT_HDL_OUT    5
-#define NGX_RTMP_LOG_EVENT_EVT_HLS_OUT    6
-#define NGX_RTMP_LOG_EVENT_FLUX           7
-#define NGX_RTMP_LOG_EVENT_DELAY          8
-#define NGX_RTMP_LOG_EVENT_MAX            9
-
+#define NGX_RTMP_LOG_EVENT_NOTIFY_LATENCY 			0
+#define NGX_RTMP_LOG_EVENT_BW_IN          			1
+#define NGX_RTMP_LOG_EVENT_BW_OUT         			2
+#define NGX_RTMP_LOG_EVENT_EVT_IN         			3
+#define NGX_RTMP_LOG_EVENT_EVT_RTMP_OUT  			4
+#define NGX_RTMP_LOG_EVENT_EVT_HDL_OUT    			5
+#define NGX_RTMP_LOG_EVENT_EVT_HLS_OUT    			6
+#define NGX_RTMP_LOG_EVENT_FLUX           			7
+#define NGX_RTMP_LOG_EVENT_DELAY          			8
+#define NGX_RTMP_LOG_EVENT_PUBLISHER_FINALIZE                   9
+#define NGX_RTMP_LOG_EVENT_MAX            			10
 
 typedef struct ngx_rtmp_log_op_s ngx_rtmp_log_op_t;
 

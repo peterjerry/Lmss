@@ -55,6 +55,11 @@ typedef struct {
 #if (NGX_HAVE_INET6 && defined IPV6_V6ONLY)
     unsigned                ipv6only:2;
 #endif
+
+#if (NGX_HAVE_REUSEPORT)
+    unsigned                reuseport:1;
+#endif
+
     unsigned                so_keepalive:2;
     unsigned                proxy_protocol:1;
 #if (NGX_HAVE_KEEPALIVE_TUNABLE)
@@ -153,6 +158,24 @@ typedef struct {
 #define NGX_RTMP_USER_UNKNOWN           8
 #define NGX_RTMP_USER_BUFFER_END        31
 
+/** publish finalize log **/
+
+typedef enum {
+    NGX_RTMP_LOG_FINALIZE_CLIENT_CLOSE_SESSION_CODE,
+    NGX_RTMP_LOG_FINALIZE_HANDSHAKE_RECV_ERR_CODE,
+    NGX_RTMP_LOG_FINALIZE_HANDSHAKE_SEND_ERR_CODE,
+    NGX_RTMP_LOG_FINALIZE_RTMP_PUBLISHER_CLOSE_CODE,
+    NGX_RTMP_LOG_FINALIZE_RTMP_RECV_ERR_CODE,
+    NGX_RTMP_LOG_FINALIZE_PARSE_RTMP_HEAD_ERR_CODE,
+    NGX_RTMP_LOG_FINALIZE_RTMP_PING_ERR_CODE,
+    NGX_RTMP_LOG_FINALIZE_DROP_IDLE_CODE,
+    NGX_RTMP_LOG_FINALIZE_MANDATORY_PACKET_ERR_CODE,
+    NGX_RTMP_LOG_FINALIZE_CONNECT_APP_NAME_ILLEGAL,
+    NGX_RTMP_LOG_FINALIZE_PUBLISH_STREAM_NAME_ILLEGAL,
+    NGX_RTMP_LOG_FINALIZE_DS_CLOSE_PUBLISHER,
+    NGX_RTMP_LOG_FINALIZE_MAX_CODE
+}ngx_rtmp_log_finalize_code_t;
+
 
 /* NGX_RTMP_MAX_CHUNK_HEADER > NGX_RTMP_MAX_FLV_TAG_HEADER */
 
@@ -181,6 +204,10 @@ typedef struct {
 
 #define NGX_RTMP_MAX_BUF_SIZE       1024
 
+#define NGX_RTMP_MAX_NAME_LEN       128  
+
+#define BLANK_SPACE " "
+
 
 typedef struct {
     ngx_int_t               user_id;
@@ -189,38 +216,38 @@ typedef struct {
     ngx_uint_t              auth:1;
     ngx_uint_t              gop_cache:1;
     ngx_uint_t              rtmp_status_code:1;
-    ngx_msec_t             idle_timeout;
-    ngx_uint_t               hdl:1;
-    ngx_uint_t               hls:1;
-    ngx_msec_t             hls_fragment;
-    ngx_msec_t             hls_playlist_length;
-    
+    ngx_msec_t              idle_timeout;
+    ngx_uint_t              hdl:1;
+    ngx_uint_t              hls:1;
+    ngx_msec_t              hls_fragment;
+    ngx_msec_t              hls_playlist_length;
+
     ngx_uint_t              screenshot:1;
     ngx_uint_t              screenshot_is_public:1;
     ngx_str_t               screenshot_bucket;
     ngx_str_t               screenshot_url;
     ngx_uint_t              screenshot_is_cover;
-    ngx_msec_t            screenshot_interval;
-    
+    ngx_msec_t              screenshot_interval;
+
     ngx_uint_t              hls_vod:1;
     ngx_uint_t              hls_vod_is_public:1;
     ngx_str_t               hls_vod_bucket;
     ngx_str_t               hls_vod_url;
-    
+
     ngx_uint_t              mp4_vod:1;
     ngx_uint_t              mp4_vod_is_public:1;
     ngx_str_t               mp4_vod_bucket;
     ngx_str_t               mp4_vod_url;
-    
+
     ngx_str_t               region_hls;
     ngx_str_t               region_pic;
     ngx_str_t               region_mp4;
 
-    ngx_str_t              host_hls;
-    ngx_str_t              host_pic;
-    ngx_str_t              host_mp4;
+    ngx_str_t               host_hls;
+    ngx_str_t               host_pic;
+    ngx_str_t               host_mp4;
 
-    ngx_flag_t             hls_vod_auto_merge;    
+    ngx_flag_t              hls_vod_auto_merge;
 } ngx_rtmp_conf_t;
 
 typedef struct {
@@ -450,7 +477,11 @@ typedef struct {
     ngx_str_t              *addr_text;
     int                     connected;
 
-    ngx_event_t            *posted_dry_events;
+#if (nginx_version >= 1007005)
+        ngx_queue_t             posted_dry_events;
+#else
+        ngx_event_t            *posted_dry_events;
+#endif
 
     /* client buffer time in msec */
     uint32_t                buflen;
@@ -478,6 +509,9 @@ typedef struct {
     int                     reset;
     int                     silent;
 
+    /*real frame rate*/
+    ngx_uint_t          real_frame_rate;
+
     /* host_in: input vhost  port_in: input port */
     ngx_str_t				host_in;
     ngx_int_t               port_in;
@@ -503,6 +537,9 @@ typedef struct {
 
     /**  flux last stat time **/
     ngx_msec_t           	last_time;
+
+    /**  publish finalize code **/
+    ngx_uint_t              finalize_code;
 
     /* ping */
     ngx_event_t             ping_evt;
@@ -899,6 +936,48 @@ ngx_rtmp_get_utc_time()
 }
 
 
+static ngx_inline ngx_int_t
+ngx_rtmp_string_check(ngx_str_t *str)
+{ 
+    #define  TABLES_LEN         256
+    ngx_uint_t ii;
+    /*
+    1: especial char
+    0: normal char
+    */
+    static u_short ascii_tables[TABLES_LEN] = {
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,1,
+        0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,
+        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,
+        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    };
+
+    u_short * p = ascii_tables;
+    for (ii = 0;  ii < str->len; ii++){
+
+        if (*(p + str->data[ii]) == 1) {
+            return NGX_ERROR;
+        }else{
+            continue;
+        }
+    }
+
+    return NGX_OK;
+}
+
+
 void ngx_rtmp_time_update_timer(ngx_event_t *ev);
 
 extern ngx_rtmp_bandwidth_t                 ngx_rtmp_bw_out;
@@ -910,7 +989,14 @@ extern ngx_uint_t                           ngx_rtmp_naccepted;
 extern ngx_uint_t                           ngx_rtmp_hls_naccepted;
 extern ngx_uint_t                           ngx_rtmp_hdl_naccepted;
 
+#if (nginx_version >= 1007011)
+extern ngx_queue_t                          ngx_rtmp_init_queue;
+#elif (nginx_version >= 1007005)
+extern ngx_thread_volatile ngx_queue_t      ngx_rtmp_init_queue;
+#else
 extern ngx_thread_volatile ngx_event_t     *ngx_rtmp_init_queue;
+#endif
+
 
 extern ngx_uint_t                           ngx_rtmp_max_module;
 extern ngx_module_t                         ngx_rtmp_core_module;
