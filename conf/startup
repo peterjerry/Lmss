@@ -18,6 +18,20 @@ stop()
     if [ -n "$exist" ]; then
         sudo ${ROOT_PATH}/sbin/lmss -p /usr/local/lmss/ -c ${ROOT_PATH}/conf/lmss.conf -s stop
     fi
+    
+    #deleted the rtmp.sock
+    cf="/usr/local/lmss/conf/lmss.conf"
+    unix=`cat $cf |grep "listen" | grep "rtmp.sock"`
+    if [ -n "$unix" ]; then
+        unix=${unix#*:}
+        if [ -n "$unix" ]; then
+            unix=${unix%;*}
+            if [ -n "$unix" ]; then
+                rm -rf $unix
+                echo "deleted the rtmp.sock sucess..."
+            fi
+        fi
+    fi
     echo 'stop...'
 }
 

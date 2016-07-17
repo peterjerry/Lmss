@@ -230,6 +230,7 @@ typedef struct {
     ngx_msec_t              screenshot_interval;
 
     ngx_uint_t              hls_vod:1;
+    ngx_uint_t              hls_vod_ts_zero:1;
     ngx_uint_t              hls_vod_is_public:1;
     ngx_str_t               hls_vod_bucket;
     ngx_str_t               hls_vod_url;
@@ -488,7 +489,7 @@ typedef struct {
     uint32_t                ack_size;
 
     /* billing parameters */
-	time_t 					connect_time;
+    time_t                  connect_time;
     ngx_uint_t              is_public;
     ngx_uint_t              is_drm;
 

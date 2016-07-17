@@ -641,6 +641,8 @@ ngx_rtmp_notify_update_create(ngx_rtmp_session_t *s, void *arg,
         ngx_str_null(&sfx);
     }
 
+    ++ ctx->update_cnt;
+
     /*get codec related args*/
     codec_data = ngx_pcalloc(pool, sizeof(codec_st));
     if (codec_data == NULL) {
@@ -662,22 +664,24 @@ ngx_rtmp_notify_update_create(ngx_rtmp_session_t *s, void *arg,
                             sizeof("&timestamp=") + NGX_INT32_LEN +
                             sizeof("&srv=") + s->host_in.len +
                             sizeof("&name=") + name_len * 3 +
-                            sizeof("&width=") + sizeof(codec_data->width) +
-                            sizeof("&height=") + sizeof(codec_data->height) +
-                            sizeof("&frame_rate=") + sizeof(codec_data->frame_rate) +
+                            sizeof("&width=") + NGX_UINT32_LEN +
+                            sizeof("&height=") + NGX_UINT32_LEN +
+                            sizeof("&frame_rate=") + NGX_UINT32_LEN +
                             sizeof("&v_codec=") + v_codec_len +
                             sizeof("&v_profile=") + v_profile_len +
-                            sizeof("&compat=") + sizeof(codec_data->compat) +
-                            sizeof("&level=") + sizeof(codec_data->level) +
+                            sizeof("&compat=") + NGX_UINT32_LEN +
+                            sizeof("&level=") + NGX_UINT32_LEN +
                             sizeof("&a_codec=") + a_codec_len +
                             sizeof("&a_profile=") + a_profile_len +
-                            sizeof("&channels=") + sizeof(codec_data->channels) +
-                            sizeof("&sample_rate=") + sizeof(codec_data->sample_rate) +
-                            sizeof("&bw_in_audio=") + sizeof(uint64_t) +
-                            sizeof("&bw_in_video=") + sizeof(uint64_t) +
-                            sizeof("&bw_real=") + sizeof(uint64_t) +
-                            sizeof("&bw_in=") + sizeof(uint64_t) +
-                            sizeof("&real_framerate=") + sizeof(ngx_uint_t));
+                            sizeof("&update_cnt=") + NGX_UINT32_LEN +
+                            sizeof("&channels=") + NGX_UINT32_LEN +
+                            sizeof("&sample_rate=") + NGX_UINT32_LEN +
+                            sizeof("&bw_in_audio=") + NGX_UINT64_LEN +
+                            sizeof("&bw_in_video=") + NGX_UINT64_LEN +
+                            sizeof("&bw_real=") + NGX_UINT64_LEN +
+                            sizeof("&bw_in=") + NGX_UINT64_LEN +
+                            sizeof("&real_framerate=") + NGX_UINT32_LEN +
+                            sizeof("&connect_time=") + NGX_UINT32_LEN);
     if (b == NULL) {
         return NULL;
     }
@@ -732,6 +736,10 @@ ngx_rtmp_notify_update_create(ngx_rtmp_session_t *s, void *arg,
                                        NGX_ESCAPE_ARGS);
     }
 
+    b->last = ngx_cpymem(b->last, (u_char*) "&update_cnt=",
+                         sizeof("&update_cnt=") - 1);
+    b->last = ngx_sprintf(b->last, "%ui", ctx->update_cnt);
+
     b->last = ngx_cpymem(b->last, (u_char*) "&compat=",
                          sizeof("&compat=") - 1);
     b->last = ngx_sprintf(b->last, "%ui", codec_data->compat);
@@ -785,6 +793,11 @@ ngx_rtmp_notify_update_create(ngx_rtmp_session_t *s, void *arg,
         b->last = ngx_cpymem(b->last, (u_char*) "&real_framerate=",
                              sizeof("&real_framerate=") - 1);
         b->last = ngx_sprintf(b->last, "%ui", stream->frame_rate.real_frame_rate);
+
+        /*connect time*/
+        b->last = ngx_cpymem(b->last, (u_char*) "&connect_time=",
+                             sizeof("&connect_time=") - 1);
+        b->last = ngx_sprintf(b->last, "%T", s->connect_time);
     }
     
     return ngx_rtmp_notify_create_request(s, pool, NGX_RTMP_NOTIFY_UPDATE, pl, &s->args);
@@ -2156,6 +2169,7 @@ ngx_rtmp_notify_connect_json_decode(ngx_rtmp_session_t *s, char *jsonstr)
     NGX_RTMP_NOTIFY_JSON_GET_STR("host_pic", host_pic);
     
     NGX_RTMP_NOTIFY_JSON_GET_INT("hls_vod_auto_merge", hls_vod_auto_merge);
+    NGX_RTMP_NOTIFY_JSON_GET_INT("hls_vod_ts_zero", hls_vod_ts_zero);  
     
 #undef NGX_RTMP_NOTIFY_JSON_GET_INT
 #undef NGX_RTMP_NOTIFY_JSON_GET_STR

@@ -1920,6 +1920,10 @@ ngx_rtmp_live_av(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
 
     if (cs->active) {
         lh.timestamp = cs->timestamp;
+
+        h->type == NGX_RTMP_MSG_AUDIO ?
+            (ctx->stream->last_audio_ts = h->timestamp):
+            (ctx->stream->last_video_ts = h->timestamp);
     }
 
     clh = lh;

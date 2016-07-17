@@ -97,6 +97,8 @@ struct ngx_rtmp_live_stream_s {
     ngx_event_t                         check_evt;
     ngx_msec_t                          check_evt_msec;
     ngx_event_t                         flux_evt;
+    uint32_t                            last_audio_ts;
+    uint32_t                            last_video_ts;
     unsigned                            active:1;
     unsigned                            publishing:1;
 };

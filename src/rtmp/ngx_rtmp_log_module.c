@@ -28,8 +28,9 @@ static char * ngx_rtmp_log_compile_format(ngx_conf_t *cf, ngx_array_t *ops,
        ngx_array_t *args, ngx_uint_t s);
 static void ngx_rtmp_log_write(ngx_rtmp_session_t *s, ngx_rtmp_log_t *log,
        ngx_rtmp_log_fmt_t *fmt);
-
+static ngx_rtmp_log_ctx_t *ngx_rtmp_log_pcalloc_ctx(ngx_rtmp_session_t *s);
 static ngx_int_t ngx_rtmp_log_publisher_finalize(ngx_rtmp_session_t *s);
+
 
 static const char * ngx_rtmp_log_standards[NGX_RTMP_LOG_EVENT_MAX] = 
 {
@@ -125,6 +126,20 @@ ngx_module_t  ngx_rtmp_log_module = {
     NULL,                                   /* exit master */
     NGX_MODULE_V1_PADDING
 };
+
+static size_t
+ngx_rtmp_log_var_stream_duration_sec_getlen(ngx_rtmp_session_t *s, ngx_rtmp_log_op_t *op)
+{
+    return NGX_INT_T_LEN;
+}
+
+
+static u_char *
+ngx_rtmp_log_var_stream_duration_sec_getdata(ngx_rtmp_session_t *s, u_char *buf,
+    ngx_rtmp_log_op_t *op)
+{
+    return ngx_snprintf(buf, NGX_INT_T_LEN, "%L", (int64_t)(ngx_time() - s->connect_time));
+}
 
 
 static size_t
@@ -275,13 +290,15 @@ ngx_rtmp_log_var_online_players_getdata(ngx_rtmp_session_t *s, u_char *buf,
     ngx_uint_t                 online_num = 0;
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
-    stream = ctx->stream;
-    pctx = stream->ctx;
-    while (pctx) {
-        if (!pctx->publishing && !pctx->session->relay_type) {
-            online_num ++;
+    if (ctx) {
+        stream = ctx->stream;
+        pctx = stream->ctx;
+        while (pctx) {
+            if (!pctx->publishing && !pctx->session->relay_type) {
+                online_num ++;
+            }
+            pctx = pctx->next;
         }
-        pctx = pctx->next;
     }
 
     return ngx_snprintf(buf, NGX_INT_T_LEN, "%l", online_num);
@@ -464,7 +481,7 @@ ngx_rtmp_log_var_ntype_getlen(ngx_rtmp_session_t *s,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
 
-    return ngx_strlen(ctx->name);
+    return ctx && ctx->name ? ngx_strlen(ctx->name) : 0;
 }
 
 
@@ -476,7 +493,7 @@ ngx_rtmp_log_var_ntype_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
 
-    return ngx_cpymem(buf, ctx->name, ngx_strlen(ctx->name));
+    return ctx && ctx->name ? ngx_cpymem(buf, ctx->name, ngx_strlen(ctx->name)) : buf;
 }
 
 
@@ -496,7 +513,7 @@ ngx_rtmp_log_var_notify_stime_ms_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
 
-    return ngx_sprintf(buf, "%ui", ctx->start);
+    return ctx ? ngx_sprintf(buf, "%ui", ctx->start) : buf;
 }
 
 
@@ -516,7 +533,7 @@ ngx_rtmp_log_var_notify_etime_ms_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
 
-    return ngx_sprintf(buf, "%ui", ctx->end);
+    return ctx ? ngx_sprintf(buf, "%ui", ctx->end) : buf;
 }
 
 
@@ -536,7 +553,7 @@ ngx_rtmp_log_var_notify_diff_ms_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
 
-    return ngx_sprintf(buf, "%i", ((ngx_int_t) ctx->end) - ctx->start);
+    return ctx ? ngx_sprintf(buf, "%i", ((ngx_int_t) ctx->end) - ctx->start) : buf;
 }
 
 
@@ -556,7 +573,7 @@ ngx_rtmp_log_var_notify_result_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
 
-    return ngx_sprintf(buf, "%i", ctx->ret);
+    return ctx ? ngx_sprintf(buf, "%i", ctx->ret): buf;
 }
 
 
@@ -577,11 +594,93 @@ ngx_rtmp_log_var_bw_in_video_kb_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
     if (ctx == NULL || ctx->stream == NULL) {
+        value = 0;
+    } else {
+        value = (uint64_t)((ctx->stream->bw_in_video.bandwidth * 8) / 1024);
+    }
+
+    return ngx_sprintf(buf, "%ul", value);
+}
+
+
+static size_t
+ngx_rtmp_log_var_last_av_ts_diff_getlen(ngx_rtmp_session_t *s,
+    ngx_rtmp_log_op_t *op)
+{
+    return NGX_INT64_LEN;
+}
+
+
+static u_char *
+ngx_rtmp_log_var_last_av_ts_diff_getdata(ngx_rtmp_session_t *s, u_char *buf,
+    ngx_rtmp_log_op_t *op)
+{
+    ngx_rtmp_live_ctx_t    *ctx;
+    int64_t                 value;
+
+    ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
+    if (ctx == NULL || ctx->stream == NULL) {
 
         value = 0;
     } else {
 
-        value = (uint64_t)((ctx->stream->bw_in_video.bandwidth * 8) / 1024);
+        value = (int64_t)ctx->stream->last_video_ts - (int64_t)ctx->stream->last_audio_ts;
+    }
+
+    return ngx_sprintf(buf, "%l", value);
+}
+
+
+static size_t
+ngx_rtmp_log_var_last_audio_ts_getlen(ngx_rtmp_session_t *s,
+    ngx_rtmp_log_op_t *op)
+{
+    return NGX_INT64_LEN;
+}
+
+
+static u_char *
+ngx_rtmp_log_var_last_audio_ts_getdata(ngx_rtmp_session_t *s, u_char *buf,
+    ngx_rtmp_log_op_t *op)
+{
+    ngx_rtmp_live_ctx_t    *ctx;
+    uint64_t                value;
+
+    ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
+    if (ctx == NULL || ctx->stream == NULL) {
+
+        value = 0;
+    } else {
+
+        value = ctx->stream->last_audio_ts;
+    }
+
+    return ngx_sprintf(buf, "%ul", value);
+}
+
+
+static size_t
+ngx_rtmp_log_var_last_video_ts_getlen(ngx_rtmp_session_t *s,
+    ngx_rtmp_log_op_t *op)
+{
+    return NGX_INT64_LEN;
+}
+
+
+static u_char *
+ngx_rtmp_log_var_last_video_ts_getdata(ngx_rtmp_session_t *s, u_char *buf,
+    ngx_rtmp_log_op_t *op)
+{
+    ngx_rtmp_live_ctx_t    *ctx;
+    uint64_t                value;
+
+    ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
+    if (ctx == NULL || ctx->stream == NULL) {
+
+        value = 0;
+    } else {
+
+        value = ctx->stream->last_video_ts;
     }
 
     return ngx_sprintf(buf, "%ul", value);
@@ -605,13 +704,10 @@ ngx_rtmp_log_var_bw_in_audio_kb_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
     if (ctx == NULL || ctx->stream == NULL) {
-
         value = 0;
     } else {
-
         value = (uint64_t)((ctx->stream->bw_in_audio.bandwidth * 8) / 1024);
     }
-
     return ngx_sprintf(buf, "%ul", value);
 }
 
@@ -633,13 +729,10 @@ ngx_rtmp_log_var_bw_in_real_kb_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
     if (ctx == NULL || ctx->stream == NULL) {
-
         value = 0;
     } else {
-
         value = (uint64_t)((ctx->stream->bw_in.bandwidth * 8) / 1024);
     }
-
     return ngx_sprintf(buf, "%ul", value);
 }
 
@@ -661,13 +754,10 @@ ngx_rtmp_log_var_bw_in_exp_kb_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
     if (ctx == NULL || ctx->stream == NULL) {
-
         value = 0;
     } else {
-
         value = (uint64_t)((ctx->stream->bw_real.bandwidth * 8) / 1024);
     }
-
     return ngx_sprintf(buf, "%uL", value);
 }
 
@@ -689,14 +779,11 @@ ngx_rtmp_log_var_bw_diff_kb_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
     if (ctx == NULL || ctx->stream == NULL) {
-
         value = 0;
     } else {
-
         value = ctx->stream->bw_real.bandwidth - ctx->stream->bw_in.bandwidth;
         value = (value * 8) / 1024;
     }
-
     return ngx_sprintf(buf, "%l", value);
 }
 
@@ -718,13 +805,10 @@ ngx_rtmp_log_var_bw_out_kb_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
     if (ctx == NULL) {
-
         value = 0;
     } else {
-
         value = (uint64_t)((ctx->bw_out.bandwidth * 8) / 1024);
     }
-
     return ngx_sprintf(buf, "%ul", value);
 }
 
@@ -793,7 +877,7 @@ ngx_rtmp_log_var_ret_code_getlen(ngx_rtmp_session_t *s,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
 
-    return ngx_strlen(ctx->ret_code);
+    return ctx ? ngx_strlen(ctx->ret_code) : 0;
 }
 
 
@@ -805,7 +889,7 @@ ngx_rtmp_log_var_ret_code_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
 
-    return ngx_cpymem(buf, ctx->ret_code, ngx_strlen(ctx->ret_code));
+    return ctx ? ngx_cpymem(buf, ctx->ret_code, ngx_strlen(ctx->ret_code)) : buf;
 }
 
 
@@ -833,7 +917,7 @@ ngx_rtmp_log_var_description_getlen(ngx_rtmp_session_t *s,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
 
-    return ngx_strlen(ctx->description);
+    return ctx ? ngx_strlen(ctx->description) : 0;
 }
 
 
@@ -845,7 +929,7 @@ ngx_rtmp_log_var_description_getdata(ngx_rtmp_session_t *s, u_char *buf,
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_netcall_module);
 
-    return ngx_cpymem(buf, ctx->description, ngx_strlen(ctx->description));
+    return ctx ? ngx_cpymem(buf, ctx->description, ngx_strlen(ctx->description)) : buf;
 }
 
 
@@ -1113,12 +1197,14 @@ ngx_rtmp_log_var_session_readable_time_getdata(ngx_rtmp_session_t *s,
     return buf;
 }
 
+
 static size_t
 ngx_rtmp_log_var_sample_date_getlen(ngx_rtmp_session_t *s,
     ngx_rtmp_log_op_t *op)
 {
     return NGX_INT64_LEN;
 }
+
 
 static u_char *
 ngx_rtmp_log_var_sample_date_getdata(ngx_rtmp_session_t *s, u_char *buf,
@@ -1128,15 +1214,14 @@ ngx_rtmp_log_var_sample_date_getdata(ngx_rtmp_session_t *s, u_char *buf,
             "%ui", s->delay->start_time + s->delay->time_cost);
 }
 
-static ngx_inline ngx_rtmp_codec_ctx_t*
+
+static ngx_rtmp_codec_ctx_t *
 ngx_rtmp_log_get_codec_ctx(ngx_rtmp_session_t *s)
 {
-    ngx_rtmp_codec_ctx_t    *codec_ctx;
     ngx_rtmp_live_ctx_t     *ctx, *pctx;
 
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_live_module);
-    if (ctx == NULL)
-    {
+    if (ctx == NULL){
         return NULL;
     }
 
@@ -1146,19 +1231,21 @@ ngx_rtmp_log_get_codec_ctx(ngx_rtmp_session_t *s)
         if (NULL == ctx->stream) {
             return NULL;
         }
+
         for(pctx = ctx->stream->ctx; pctx; pctx = pctx->next) {
             if (pctx->publishing) {
                 break;
             }
         }
     }
+
     if (!pctx) {
         return NULL;
     }
-    
-    codec_ctx = ngx_rtmp_get_module_ctx(pctx->session, ngx_rtmp_codec_module);
-    return codec_ctx;
+
+    return ngx_rtmp_get_module_ctx(pctx->session, ngx_rtmp_codec_module);
 }
+
 
 static size_t
 ngx_rtmp_log_var_stream_id_getlen(ngx_rtmp_session_t *s,
@@ -1457,6 +1544,21 @@ static ngx_rtmp_log_var_t ngx_rtmp_log_vars[] = {
       ngx_rtmp_log_var_notify_result_getdata,
       0 },
 
+    { ngx_string("last_av_ts_diff"),
+      ngx_rtmp_log_var_last_av_ts_diff_getlen,
+      ngx_rtmp_log_var_last_av_ts_diff_getdata,
+      0 },
+
+    { ngx_string("last_audio_ts"),
+      ngx_rtmp_log_var_last_audio_ts_getlen,
+      ngx_rtmp_log_var_last_audio_ts_getdata,
+      0 },
+
+    { ngx_string("last_video_ts"),
+      ngx_rtmp_log_var_last_video_ts_getlen,
+      ngx_rtmp_log_var_last_video_ts_getdata,
+      0 },
+
     { ngx_string("bw_in_video_kb"),
       ngx_rtmp_log_var_bw_in_video_kb_getlen,
       ngx_rtmp_log_var_bw_in_video_kb_getdata,
@@ -1692,11 +1794,16 @@ static ngx_rtmp_log_var_t ngx_rtmp_log_vars[] = {
 	  ngx_rtmp_log_var_finalize_desc_getdata,
 	  0 },
 
+    { ngx_string("stream_duration_sec"),
+      ngx_rtmp_log_var_stream_duration_sec_getlen,
+      ngx_rtmp_log_var_stream_duration_sec_getdata,
+      0 },
+
     { ngx_null_string, NULL, NULL, 0 }
 };
 
 
-    static void *
+static void *
 ngx_rtmp_log_create_main_conf(ngx_conf_t *cf)
 {
     ngx_rtmp_log_main_conf_t   *lmcf;
@@ -2207,6 +2314,9 @@ ngx_rtmp_log_evt_in(ngx_rtmp_session_t *s)
     }
 
     ctx = ngx_rtmp_log_pcalloc_ctx(s);
+    if (ctx == NULL) {
+        return;
+    }
 
     ctx->event = NGX_RTMP_LOG_EVENT_EVT_IN;
     log = lacf->logs->elts;
@@ -2235,7 +2345,10 @@ ngx_rtmp_log_evt_out(ngx_rtmp_session_t *s)
     }
 
     ctx = ngx_rtmp_log_pcalloc_ctx(s);
-
+    if (ctx == NULL) {
+        return;
+    }
+    
     ctx->event = NGX_RTMP_LOG_EVENT_EVT_RTMP_OUT;
     log = lacf->logs->elts;
     for (n = 0; n < lacf->logs->nelts; ++n, ++log) {
@@ -2263,7 +2376,10 @@ ngx_rtmp_log_evt_hdl_out(ngx_rtmp_session_t *s)
     }
 
     ctx = ngx_rtmp_log_pcalloc_ctx(s);
-
+    if (ctx == NULL) {
+        return;
+    }
+    
     ctx->event = NGX_RTMP_LOG_EVENT_EVT_HDL_OUT;
     log = lacf->logs->elts;
     for (n = 0; n < lacf->logs->nelts; ++n, ++log) {
@@ -2291,7 +2407,10 @@ ngx_rtmp_log_evt_hls_out(ngx_rtmp_session_t *s)
     }
 
     ctx = ngx_rtmp_log_pcalloc_ctx(s);
-
+    if (ctx == NULL) {
+        return;
+    }
+    
     ctx->event = NGX_RTMP_LOG_EVENT_EVT_HLS_OUT;
     log = lacf->logs->elts;
     for (n = 0; n < lacf->logs->nelts; ++n, ++log) {
@@ -2319,7 +2438,10 @@ ngx_rtmp_log_flux(ngx_rtmp_session_t *s)
     }
 
     ctx = ngx_rtmp_log_pcalloc_ctx(s);
-
+    if (ctx) {
+        return;
+    }
+    
     ctx->event = NGX_RTMP_LOG_EVENT_FLUX;
     log = lacf->logs->elts;
     for (n = 0; n < lacf->logs->nelts; ++n, ++log) {
@@ -2339,7 +2461,10 @@ ngx_rtmp_log_pcalloc_ctx(ngx_rtmp_session_t *s)
     ngx_rtmp_log_app_conf_t    *lacf;
 
     lacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_log_module);
-
+    if (lacf == NULL){
+        return NULL;
+    }
+    
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_log_module);
     if (ctx == NULL) {
         ctx = ngx_pcalloc(s->pool, sizeof(ngx_rtmp_log_ctx_t));
@@ -2352,23 +2477,6 @@ ngx_rtmp_log_pcalloc_ctx(ngx_rtmp_session_t *s)
 
         ngx_rtmp_set_ctx(s, ctx, ngx_rtmp_log_module);
     }
-
-    return ctx;
-}
-
-
-static ngx_rtmp_log_ctx_t *
-ngx_rtmp_log_set_names(ngx_rtmp_session_t *s, u_char *name, u_char *args)
-{
-    ngx_rtmp_log_ctx_t         *ctx;
-    ngx_rtmp_log_app_conf_t    *lacf;
-
-    lacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_log_module);
-
-    ctx = ngx_rtmp_log_pcalloc_ctx(s);
-
-    ngx_memcpy(ctx->name, name, NGX_RTMP_MAX_NAME);
-    ngx_memcpy(ctx->args, args, NGX_RTMP_MAX_ARGS);
 
     return ctx;
 }

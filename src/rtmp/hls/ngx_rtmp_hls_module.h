@@ -63,6 +63,7 @@ struct ngx_rtmp_hls_ctx_s {
     uint64_t                            frag_ts;
     uint64_t                            frag_ts_system;
     uint64_t                            frag_seq;
+    uint64_t                            last_ts;
     ngx_uint_t                          nfrags;
     ngx_uint_t                          winfrags;
     ngx_rtmp_hls_frag_t                *frags; /* circular 2 * winfrags + 1 */
@@ -75,12 +76,12 @@ struct ngx_rtmp_hls_ctx_s {
     uint64_t                            aframe_pts;
     ngx_rtmp_hls_variant_t             *var;
     ngx_event_handler_pt                write_handler_backup;
-    uint32_t                            base_timestamp;
     unsigned                            m3u8_header:1;
     unsigned                            publisher:1;
     unsigned                            opened:1;
-    unsigned                            gen_ts:1;
     unsigned                            closed:1;
+    unsigned                            got_first_frame:1;
+    uint32_t                            base_timestamp;
 };
 
 
@@ -89,6 +90,7 @@ typedef struct {
     ngx_msec_t                          hls_fragment;
     ngx_msec_t                          hls_playlist_length;
     ngx_flag_t                          hls_vod;
+    ngx_flag_t                          hls_vod_ts_zero;
     ngx_msec_t                          vod_fraglen;
     ngx_msec_t                          max_fraglen;
     ngx_msec_t                          muxdelay;

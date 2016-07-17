@@ -286,6 +286,13 @@ static ngx_command_t ngx_rtmp_hls_commands[] = {
       NGX_RTMP_APP_CONF_OFFSET,
       offsetof(ngx_rtmp_hls_app_conf_t, hls_vod),
       NULL },
+      
+    { ngx_string("hls_vod_ts_zero"),
+      NGX_RTMP_MAIN_CONF|NGX_RTMP_SRV_CONF|NGX_RTMP_APP_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_flag_slot,
+      NGX_RTMP_APP_CONF_OFFSET,
+      offsetof(ngx_rtmp_hls_app_conf_t, hls_vod_ts_zero),
+      NULL },
 
     { ngx_string("hls_vod_path"),
       NGX_RTMP_MAIN_CONF|NGX_RTMP_SRV_CONF|NGX_RTMP_APP_CONF|NGX_CONF_TAKE1,
@@ -1534,6 +1541,7 @@ ngx_rtmp_hls_open_fragment(ngx_rtmp_session_t *s, uint64_t ts,
     f->id = id;
     f->duration = 0.;
 
+    ctx->last_ts = ts;
     ctx->frag_ts = ts;
     ctx->frag_ts_system = ngx_current_msec;
 
@@ -2692,7 +2700,7 @@ ngx_rtmp_hls_update_fragment(ngx_rtmp_session_t *s, uint64_t ts,
     ngx_msec_t                  ts_frag_len;
     ngx_int_t                   same_frag, force, discont;
     ngx_buf_t                  *b;
-    int64_t                     d, system_duration;
+    int64_t                     d, d1, system_duration;
 
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
     ctx = ngx_rtmp_get_module_ctx(s, ngx_rtmp_hls_module);
@@ -2710,6 +2718,7 @@ ngx_rtmp_hls_update_fragment(ngx_rtmp_session_t *s, uint64_t ts,
 
         f = ngx_rtmp_hls_get_frag(s, ctx->nfrags);
         d = (int64_t) (ts - ctx->frag_ts);
+        d1 = (int64_t) (ts - ctx->last_ts);
 
         if (d > (int64_t) hacf->max_fraglen * 90) {
 
@@ -2723,6 +2732,15 @@ ngx_rtmp_hls_update_fragment(ngx_rtmp_session_t *s, uint64_t ts,
             f->duration = system_duration / 1000.;
             force = 1;
         }
+
+        if (d1 < 0) {
+
+            ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
+                    "curr timestamp(%uL) less then last timestamp(%uL)", ts, ctx->last_ts);
+            f->discont = 1;
+        }
+
+        ctx->last_ts = ts; // set current timestamp to last timestamp.
 
         if (force) {
             ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
@@ -2767,7 +2785,6 @@ ngx_rtmp_hls_update_fragment(ngx_rtmp_session_t *s, uint64_t ts,
 
         ngx_rtmp_hls_close_fragment(s, ts);
         ngx_rtmp_hls_open_fragment(s, ts, discont);
-        ctx->gen_ts = 1;
     }
 
     b = ctx->aframe;
@@ -2854,6 +2871,7 @@ ngx_rtmp_hls_audio(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     ngx_buf_t                      *b;
     u_char                         *p;
     ngx_uint_t                      objtype, srindex, chconf, size;
+    uint32_t                        timestamp;
 
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
 
@@ -2900,8 +2918,24 @@ ngx_rtmp_hls_audio(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         b->pos = b->last = b->start;
     }
 
+    if (ngx_rtmp_get_attr_conf(hacf, hls_vod_ts_zero)){
+
+        if (!ctx->got_first_frame) {
+
+            timestamp = 0;
+            ctx->base_timestamp = h->timestamp;
+            ctx->got_first_frame = 1;
+        } else {
+
+            timestamp = (h->timestamp > ctx->base_timestamp) ? (h->timestamp - ctx->base_timestamp) : 0;
+        }
+    } else {
+
+        timestamp = h->timestamp;
+    }
+    
     size = h->mlen - 2 + 7;
-    pts = (uint64_t) h->timestamp * 90;
+    pts = (uint64_t) timestamp * 90;
 
     if (b->start + size > b->end) {
         ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
@@ -3027,6 +3061,7 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     static u_char                   buffer[NGX_RTMP_HLS_BUFSIZE];
     static u_char                   ts_buffer[NGX_RTMP_HLS_BUFSIZE];
     ngx_uint_t                      ts_size;
+    uint32_t                        timestamp;
 
     hacf = ngx_rtmp_get_module_app_conf(s, ngx_rtmp_hls_module);
 
@@ -3189,10 +3224,27 @@ ngx_rtmp_hls_video(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         out.last += (len - 1);
     }
 
-    ngx_memzero(&frame, sizeof(frame));
+    /*hls timstamp clear zero*/
+    if (ngx_rtmp_get_attr_conf(hacf, hls_vod_ts_zero)){
 
+        if (!ctx->got_first_frame) {
+
+            timestamp = 0;
+            ctx->base_timestamp = h->timestamp;
+            ctx->got_first_frame = 1;
+        } else {
+
+            timestamp = (h->timestamp > ctx->base_timestamp) ? (h->timestamp - ctx->base_timestamp) : 0;
+        }
+    } else {
+
+        timestamp = h->timestamp;
+    }
+
+    /*set frame value*/
+    ngx_memzero(&frame, sizeof(frame));
     frame.cc = ctx->video_cc;
-    frame.dts = (uint64_t) h->timestamp * 90;
+    frame.dts = (uint64_t) timestamp * 90;
     frame.pts = frame.dts + cts * 90;
     frame.pid = 0x100;
     frame.sid = 0xe0;
@@ -3528,6 +3580,7 @@ ngx_rtmp_hls_create_app_conf(ngx_conf_t *cf)
     conf->hls_fragment = NGX_CONF_UNSET_MSEC;
     conf->hls_playlist_length = NGX_CONF_UNSET_MSEC;
     conf->hls_vod = NGX_CONF_UNSET;
+    conf->hls_vod_ts_zero = NGX_CONF_UNSET;
     conf->vod_fraglen = NGX_CONF_UNSET_MSEC;
     conf->max_fraglen = NGX_CONF_UNSET_MSEC;
     conf->muxdelay = NGX_CONF_UNSET_MSEC;
@@ -3595,6 +3648,7 @@ ngx_rtmp_hls_merge_app_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_conf_merge_str_value(conf->mp4_vod_url, prev->mp4_vod_url, "");    
 
     ngx_conf_merge_value(conf->hls_vod, prev->hls_vod, 0);
+    ngx_conf_merge_value(conf->hls_vod_ts_zero, prev->hls_vod_ts_zero, 0);
     ngx_conf_merge_str_value(conf->vod_path, prev->vod_path, "/data/vod_hls");
     ngx_conf_merge_msec_value(conf->vod_fraglen, prev->vod_fraglen, 1000*60);
 

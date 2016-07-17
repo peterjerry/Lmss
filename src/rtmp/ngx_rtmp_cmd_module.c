@@ -206,10 +206,10 @@ ngx_rtmp_cmd_connect_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
     s->vcodecs = (uint32_t) v.vcodecs;
     s->relay_type = v.relay_type;
 
-    if (s->app.len > NGX_RTMP_MAX_NAME_LEN) {
+    if (s->app.len > NGX_RTMP_MAX_NAME_LEN || s->app.len == 0) {
 
         s->finalize_code = NGX_RTMP_LOG_FINALIZE_CONNECT_APP_NAME_ILLEGAL;
-        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "error: app name len is bigger 128 bytes");
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "error: app name len is bigger 128 bytes or is 0");
         return NGX_ERROR;
     }
     
@@ -547,10 +547,10 @@ ngx_rtmp_cmd_publish_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         ngx_snprintf(s->args.data, s->args.len, "%V&%s", &args, v.args);
     }
     
-    if (s->name.len > NGX_RTMP_MAX_NAME_LEN) {
+    if (s->name.len > NGX_RTMP_MAX_NAME_LEN || s->name.len == 0) {
         
         s->finalize_code = NGX_RTMP_LOG_FINALIZE_PUBLISH_STREAM_NAME_ILLEGAL;
-        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "error: publish stream name len is bigger than 128, name is:%V", &s->name);
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "error: publish stream name len is bigger than 128 or is null");
         return NGX_ERROR;
     }
     
@@ -692,9 +692,9 @@ ngx_rtmp_cmd_play_init(ngx_rtmp_session_t *s, ngx_rtmp_header_t *h,
         ngx_snprintf(s->args.data, s->args.len, "%V&%s", &args, v.args);
     }
 
-    if (s->name.len > NGX_RTMP_MAX_NAME_LEN) {
+    if (s->name.len > NGX_RTMP_MAX_NAME_LEN || s->name.len == 0) {
 
-        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "error: play stream name len is bigger than 128, name is:%V", &s->name);
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "error: play stream name len is bigger than 128 or is null");
         return NGX_ERROR;
     }   
      

@@ -69,6 +69,7 @@ typedef struct {
 
 typedef struct {
     ngx_uint_t                                  flags;
+    ngx_uint_t                                  update_cnt;
     u_char                                      name[NGX_RTMP_MAX_NAME];
     u_char                                      args[NGX_RTMP_MAX_ARGS];
     ngx_event_t                                 update_evt;
